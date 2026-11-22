@@ -52,6 +52,19 @@ namespace StartechCombatConsole
 		TEXT("Startech.Combat.Report: the combat log's session summary per enemy type and tier (time to kill, damage taken, profit, credits per minute)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PrintReport));
 
+	static void ResetReport(const TArray<FString>& Args, UWorld* const World)
+	{
+		if (UCombatTelemetrySubsystem* const Telemetry = UCombatTelemetrySubsystem::Get(World))
+		{
+			Telemetry->ResetSession();
+			UE_LOG(LogStartechCombat, Warning, TEXT("[CombatReport] session reset"));
+		}
+	}
+
+	static FAutoConsoleCommandWithWorldAndArgs ResetCommand(TEXT("Startech.Combat.Reset"),
+		TEXT("Startech.Combat.Reset: starts a new combat log session (the report forgets earlier engagements; the CSV keeps them)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ResetReport));
+
 	static FAutoConsoleCommand TableCommand(TEXT("Startech.Combat.TTKTable"),
 		TEXT("Startech.Combat.TTKTable: prints time to kill, health lost and ammo cost per enemy and tier with the expected gear ('*' = outside its target)."),
 		FConsoleCommandDelegate::CreateStatic(&PrintTable));

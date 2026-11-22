@@ -5,7 +5,6 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "Sound/SoundBase.h"
@@ -126,7 +125,7 @@ void UShipDeathComponent::TickComponent(const float DeltaTime, const ELevelTick 
 
 float UShipDeathComponent::GetTumbleRate() const
 {
-	if (State == EState::Alive || Duration <= 0.f)
+	if (State != EState::Dying || Duration <= 0.f)
 	{
 		return 0.f;
 	}
@@ -220,55 +219,16 @@ UMeshComponent* UShipDeathComponent::GetMesh() const
 
 void UShipDeathComponent::StartFlash()
 {
-	RestoreMaterials();
-
-	UMeshComponent* const Mesh = GetMesh();
-	if (!Mesh)
-	{
-		return;
-	}
-
 	const FShipDeathSettings& Settings = UStartechSettings::Get().Death;
-	const int32 NumSlots = Mesh->GetNumMaterials();
-	if (NumSlots <= 0)
+	if (UMeshComponent* const Mesh = GetMesh())
 	{
-		return;
-	}
-
-	FlashMesh = Mesh;
-	SavedOverrides = Mesh->OverrideMaterials;
-	bMaterialsChanged = true;
-
-	for (int32 Slot = 0; Slot < NumSlots; ++Slot)
-	{
-		UMaterialInstanceDynamic* const Material = Mesh->CreateDynamicMaterialInstance(Slot);
-		if (!Material)
-		{
-			continue;
-		}
-		FlashMaterials.Add(Material);
-
-		FFlashSlot& Flashing = FlashSlots.AddDefaulted_GetRef();
-		Flashing.Material = Material;
-		for (const FName Parameter : Settings.FlashColorParameters)
-		{
-			FLinearColor Value;
-			if (!Parameter.IsNone() && Material->GetVectorParameterValue(FHashedMaterialParameterInfo(Parameter), Value))
-			{
-				Flashing.Colors.Emplace(Parameter, Value);
-			}
-		}
-		if (!Settings.FlashEmissionParameter.IsNone())
-		{
-			Flashing.bHasEmission = Material->GetScalarParameterValue(
-				FHashedMaterialParameterInfo(Settings.FlashEmissionParameter), Flashing.Emission);
-		}
+		HullFlash.Start(*Mesh, Settings.FlashColorParameters, Settings.FlashEmissionParameter);
 	}
 }
 
 void UShipDeathComponent::ApplyFlash()
 {
-	if (FlashSlots.Num() == 0 || Duration <= 0.f)
+	if (!HullFlash.IsActive() || Duration <= 0.f)
 	{
 		return;
 	}
@@ -281,51 +241,12 @@ void UShipDeathComponent::ApplyFlash()
 	const float Pulse = ShipDeath::PulseStrength * FMath::Clamp(1.f - SincePulse / ShipDeath::PulseSeconds, 0.f, 1.f);
 	Flash = FMath::Clamp(Progress * Progress * (0.6f + 0.4f * Flicker) + Pulse, 0.f, 1.f);
 
-	const float White = Settings.FlashMaxWhite * Flash;
-	const float EmissionScale = 1.f + Settings.FlashEmissionBoost * Flash;
-
-	for (const FFlashSlot& Flashing : FlashSlots)
-	{
-		UMaterialInstanceDynamic* const Material = Flashing.Material.Get();
-		if (!Material)
-		{
-			continue;
-		}
-		for (const TPair<FName, FLinearColor>& Color : Flashing.Colors)
-		{
-			Material->SetVectorParameterValue(Color.Key, FMath::Lerp(Color.Value, FLinearColor::White, White));
-		}
-		if (Flashing.bHasEmission)
-		{
-			// A base of 0 would never light up, so the boost starts from at least 1.
-			Material->SetScalarParameterValue(Settings.FlashEmissionParameter,
-				FMath::Max(Flashing.Emission, 1.f) * EmissionScale);
-		}
-	}
+	HullFlash.Apply(FLinearColor::White, Settings.FlashMaxWhite * Flash, 1.f + Settings.FlashEmissionBoost * Flash);
 }
 
 void UShipDeathComponent::RestoreMaterials()
 {
-	if (bMaterialsChanged)
-	{
-		if (UMeshComponent* const Mesh = FlashMesh.Get())
-		{
-			Mesh->EmptyOverrideMaterials();
-			for (int32 Slot = 0; Slot < SavedOverrides.Num(); ++Slot)
-			{
-				if (SavedOverrides[Slot])
-				{
-					Mesh->SetMaterial(Slot, SavedOverrides[Slot]);
-				}
-			}
-		}
-	}
-
-	bMaterialsChanged = false;
-	FlashMesh.Reset();
-	SavedOverrides.Reset();
-	FlashMaterials.Reset();
-	FlashSlots.Reset();
+	HullFlash.Restore();
 }
 
 void UShipDeathComponent::ScheduleSecondaries()
@@ -372,6 +293,7 @@ void UShipDeathComponent::Explode()
 	}
 
 	State = EState::Exploded;
+	Flash = 0.f;
 	SetComponentTickEnabled(false);
 	SecondaryTimes.Reset();
 

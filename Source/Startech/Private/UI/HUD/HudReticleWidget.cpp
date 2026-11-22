@@ -1,5 +1,6 @@
 #include "UI/HUD/HudReticleWidget.h"
 
+#include "Combat/EnemyChargeComponent.h"
 #include "EnemyData.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -259,6 +260,14 @@ FLinearColor UHudReticleWidget::GetRangeColor() const
 	}
 }
 
+float UHudReticleWidget::GetTargetChargePulse() const
+{
+	const UTargetableComponent* const Current = Target.Get();
+	const AStartechEnemyShip* const Enemy = Current ? Cast<AStartechEnemyShip>(Current->GetOwner()) : nullptr;
+	const UEnemyChargeComponent* const Charge = Enemy ? Enemy->GetChargedShot() : nullptr;
+	return Charge && Charge->IsCharging() ? Charge->GetPulse() : -1.f;
+}
+
 bool UHudReticleWidget::GetTargetFrame(const FGeometry& Geometry, FVector2f& OutMin, FVector2f& OutMax) const
 {
 	const APlayerController* const PC = GetOwningPlayer();
@@ -392,6 +401,13 @@ int32 UHudReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Al
 	const bool bHasTarget = Current && Current->IsTargetable() && LockState != ETargetLockState::None;
 	const bool bHard = bHasTarget && LockState == ETargetLockState::Hard;
 
+	// A target charging a shot at the player: its brackets turn Danger and pulse with the charge.
+	const float ChargePulse = bHasTarget ? GetTargetChargePulse() : -1.f;
+	const auto Warn = [&HudStyle, ChargePulse](const FLinearColor& Base)
+	{
+		return ChargePulse < 0.f ? Base : FHudDraw::WithOpacity(HudStyle.DangerColor, FMath::Lerp(0.55f, 1.f, ChargePulse));
+	};
+
 	// The frame on the target: thin grey brackets for a soft lock, solid Player-colour ones for a hard lock, both on
 	// the projected bounds. Not drawn while off screen.
 	FVector2f FrameMin;
@@ -404,7 +420,7 @@ int32 UHudReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Al
 			FVector2f DrawMin;
 			FVector2f DrawMax;
 			Reticle::ScaleFrame(FrameMin, FrameMax, FMath::Lerp(Reticle::EngageScale, 1.f, Snap), DrawMin, DrawMax);
-			Reticle::DrawHardBrackets(OutDrawElements, ShapeLayer, AllottedGeometry, DrawMin, DrawMax, HudStyle.PlayerColor);
+			Reticle::DrawHardBrackets(OutDrawElements, ShapeLayer, AllottedGeometry, DrawMin, DrawMax, Warn(HudStyle.PlayerColor));
 
 			// The ring fades in once the brackets have closed; a lock shown already settled has it at once.
 			const float RingAlpha = HardLockStart >= 0.0
@@ -426,7 +442,7 @@ int32 UHudReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Al
 				FrameMax = FMath::Lerp(SlideFromMax, FrameMax, Slide);
 			}
 			FHudDraw::CornerBrackets(OutDrawElements, ShapeLayer, AllottedGeometry, FrameMin, FrameMax,
-				Reticle::BracketArm, HudStyle.SoftLockColor, 1.f);
+				Reticle::BracketArm, Warn(HudStyle.SoftLockColor), ChargePulse < 0.f ? 1.f : Reticle::HardBracketThickness);
 		}
 		LastFrameMin = FrameMin;
 		LastFrameMax = FrameMax;

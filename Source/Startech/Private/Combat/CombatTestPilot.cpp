@@ -1,8 +1,13 @@
 #include "Combat/CombatTestPilot.h"
 
 #include "AmmoData.h"
+#include "Combat/ChargedShotSubsystem.h"
+#include "Combat/EnemyChargeComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Combat/CombatTelemetrySubsystem.h"
+#include "Core/SectorDirectorSubsystem.h"
+#include "Gates/WarpTransitionComponent.h"
+#include "HomeRespawnSubsystem.h"
 #include "Engine/HitResult.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -28,6 +33,22 @@ namespace CombatTestPilot
 
 	/** How far outside the fight distance a jump lands. */
 	constexpr float JumpMargin = 3000.f;
+
+	/** A dodging pilot reacts this long after a telegraph starts (a quick human). */
+	constexpr float DodgeReaction = 0.3f;
+
+	/** A non-circling pilot strafes this long to dodge: past the telegraph and the shot's flight. */
+	constexpr float DodgeStrafeSeconds = 2.5f;
+
+	/** A circling pilot swaps strafe direction after a random time in this range. */
+	constexpr float StrafeSwapMin = 3.f;
+	constexpr float StrafeSwapMax = 5.f;
+
+	const TCHAR* StyleName(const EPilotStyle Style)
+	{
+		return Style == EPilotStyle::Circle ? TEXT("circle") : Style == EPilotStyle::BackOff ? TEXT("backoff")
+			: Style == EPilotStyle::Hold ? TEXT("hold") : TEXT("face");
+	}
 }
 
 bool UCombatTestPilot::ShouldCreateSubsystem(UObject* const Outer) const
@@ -48,15 +69,25 @@ TStatId UCombatTestPilot::GetStatId() const
 void UCombatTestPilot::Deinitialize()
 {
 	AStartechEnemyShip::OnAnyEnemyDied.Remove(DeathHandle);
+	UChargedShotSubsystem::OnAnyChargeStarted.Remove(ChargeHandle);
 	Super::Deinitialize();
 }
 
-void UCombatTestPilot::Start(const FString& Type, const float Seconds, const float DistanceCm)
+void UCombatTestPilot::Start(const FString& Type, const float Seconds, const float DistanceCm, const FName Sector)
 {
 	WantedType = Type;
 	Remaining = Seconds;
 	FightDistance = DistanceCm;
 	Kills = 0;
+	Deaths = 0;
+	bWasDead = false;
+	WarpRetryIn = 0.f;
+	const USectorDirectorSubsystem* const Director = GetWorld()->GetSubsystem<USectorDirectorSubsystem>();
+	FightSector = !Sector.IsNone() ? Sector : (Director ? Director->GetCurrentSectorId() : NAME_None);
+	Dodges = 0;
+	DodgeIn = -1.f;
+	DodgeLeft = 0.f;
+	StrafeSwapIn = 0.f;
 	Target.Reset();
 	Pilot = Cast<AStartechShipPawn>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
 	bActive = Pilot.IsValid();
@@ -64,8 +95,117 @@ void UCombatTestPilot::Start(const FString& Type, const float Seconds, const flo
 	{
 		DeathHandle = AStartechEnemyShip::OnAnyEnemyDied.AddUObject(this, &UCombatTestPilot::HandleEnemyDied);
 	}
-	UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] %s: fighting %s for %.0f s at %.0f m."),
-		bActive ? TEXT("started") : TEXT("no player ship"), *Type, Seconds, DistanceCm / 100.f);
+	if (!ChargeHandle.IsValid())
+	{
+		ChargeHandle = UChargedShotSubsystem::OnAnyChargeStarted.AddUObject(this, &UCombatTestPilot::HandleChargeStarted);
+	}
+	UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] %s: fighting %s for %.0f s at %.0f m, style %s%s."),
+		bActive ? TEXT("started") : TEXT("no player ship"), *Type, Seconds, DistanceCm / 100.f,
+		CombatTestPilot::StyleName(Style), bDodge ? TEXT(", dodging") : TEXT(""));
+}
+
+bool UCombatTestPilot::ReturnToFight(AStartechShipPawn& Ship, const float DeltaTime)
+{
+	UWorld* const World = GetWorld();
+	const UHomeRespawnSubsystem* const Respawn = World->GetSubsystem<UHomeRespawnSubsystem>();
+	if (Ship.GetHealthComponent()->IsDead() || (Respawn && Respawn->IsRespawning()))
+	{
+		if (!bWasDead)
+		{
+			bWasDead = true;
+			++Deaths;
+			Target.Reset();
+			Ship.SetFireHeld(false);
+			Ship.SetSteerAxis(0.f);
+			UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] died (%d so far); waiting for the respawn."), Deaths);
+		}
+		return true;
+	}
+	bWasDead = false;
+
+	if (Ship.IsHubOpen())
+	{
+		LogStatus(Ship, nullptr, TEXT("hub open"));
+		return true;
+	}
+	if (Ship.IsDocked())
+	{
+		Ship.UndockFromStation();
+		UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] undocked."));
+		return true;
+	}
+
+	// Back to the fight's sector after a respawn at home.
+	const USectorDirectorSubsystem* const Director = World->GetSubsystem<USectorDirectorSubsystem>();
+	UWarpTransitionComponent* const Warp = Ship.FindComponentByClass<UWarpTransitionComponent>();
+	if (FightSector.IsNone() || !Director || !Warp || Director->GetCurrentSectorId() == FightSector)
+	{
+		return false;
+	}
+	WarpRetryIn -= DeltaTime;
+	if (!Warp->IsWarping() && !Director->IsBusy() && WarpRetryIn <= 0.f)
+	{
+		WarpRetryIn = 2.f;
+		const bool bStarted = Warp->BeginWarp(FightSector);
+		UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] warping back to %s: %s."), *FightSector.ToString(),
+			bStarted ? TEXT("started") : TEXT("refused, retrying"));
+	}
+	return true;
+}
+
+void UCombatTestPilot::SetStyle(const EPilotStyle InStyle, const bool bInDodge, const float InBackOffThrottle)
+{
+	Style = InStyle;
+	bDodge = bInDodge;
+	BackOffThrottle = FMath::Clamp(InBackOffThrottle, 0.f, 1.f);
+	UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] style %s%s%s."), CombatTestPilot::StyleName(Style),
+		bDodge ? TEXT(", dodging charged shots") : TEXT(""),
+		Style == EPilotStyle::BackOff ? *FString::Printf(TEXT(", reverse throttle %.2f"), BackOffThrottle) : TEXT(""));
+}
+
+void UCombatTestPilot::HandleChargeStarted(const UEnemyChargeComponent& Charge)
+{
+	if (bActive && bDodge && Charge.GetTarget() == Pilot.Get() && DodgeIn < 0.f)
+	{
+		DodgeIn = CombatTestPilot::DodgeReaction;
+	}
+}
+
+float UCombatTestPilot::UpdateSteer(const float DeltaTime)
+{
+	if (DodgeIn >= 0.f)
+	{
+		DodgeIn -= DeltaTime;
+		if (DodgeIn < 0.f)
+		{
+			++Dodges;
+			if (Style == EPilotStyle::Circle)
+			{
+				// Flip, and hold the new direction past the shot.
+				StrafeDirection = -StrafeDirection;
+				StrafeSwapIn = FMath::Max(StrafeSwapIn, CombatTestPilot::DodgeStrafeSeconds);
+			}
+			else
+			{
+				StrafeDirection = FMath::RandBool() ? 1.f : -1.f;
+				DodgeLeft = CombatTestPilot::DodgeStrafeSeconds;
+			}
+		}
+	}
+
+	if (Style == EPilotStyle::Circle)
+	{
+		StrafeSwapIn -= DeltaTime;
+		if (StrafeSwapIn <= 0.f)
+		{
+			StrafeDirection = -StrafeDirection;
+			StrafeSwapIn = FMath::FRandRange(CombatTestPilot::StrafeSwapMin, CombatTestPilot::StrafeSwapMax);
+		}
+		return StrafeDirection;
+	}
+
+	DodgeLeft = FMath::Max(DodgeLeft - DeltaTime, 0.f);
+	return DodgeLeft > 0.f ? StrafeDirection : 0.f;
 }
 
 void UCombatTestPilot::Stop(const TCHAR* const Reason)
@@ -74,6 +214,7 @@ void UCombatTestPilot::Stop(const TCHAR* const Reason)
 	{
 		Ship->SetFireHeld(false);
 		Ship->SetThrottleInput(0.f);
+		Ship->SetSteerAxis(0.f);
 		if (UTargetingComponent* const Targeting = Ship->GetTargeting())
 		{
 			Targeting->ClearTarget();
@@ -81,7 +222,8 @@ void UCombatTestPilot::Stop(const TCHAR* const Reason)
 	}
 	if (bActive)
 	{
-		UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] stopped (%s) after %d kill(s)."), Reason, Kills);
+		UE_LOG(LogStartechPilot, Warning, TEXT("[Pilot] stopped (%s) after %d kill(s), %d dodge(s), %d death(s)."), Reason, Kills,
+			Dodges, Deaths);
 	}
 	bActive = false;
 	Target.Reset();
@@ -175,10 +317,9 @@ void UCombatTestPilot::Tick(const float DeltaTime)
 		return;
 	}
 	AStartechShipPawn* const Ship = Pilot.Get();
-	const UHealthComponent* const Health = Ship ? Ship->GetHealthComponent() : nullptr;
-	if (!Ship || !Health || Health->IsDead())
+	if (!Ship || !Ship->GetHealthComponent())
 	{
-		Stop(TEXT("player died"));
+		Stop(TEXT("no player ship"));
 		return;
 	}
 	Remaining -= DeltaTime;
@@ -187,9 +328,8 @@ void UCombatTestPilot::Tick(const float DeltaTime)
 		Stop(TEXT("time up"));
 		return;
 	}
-	if (Ship->IsDocked() || Ship->IsHubOpen())
+	if (ReturnToFight(*Ship, DeltaTime))
 	{
-		LogStatus(*Ship, nullptr, TEXT("docked"));
 		return;
 	}
 
@@ -201,6 +341,7 @@ void UCombatTestPilot::Tick(const float DeltaTime)
 		Enemy = FindTarget(*Ship);
 		Targetable = Enemy ? Enemy->FindComponentByClass<UTargetableComponent>() : nullptr;
 		Target = Enemy;
+		bHolding = false;
 	}
 	UTargetingComponent* const Targeting = Ship->GetTargeting();
 	if (!Enemy || !Targetable || !Targeting)
@@ -212,7 +353,9 @@ void UCombatTestPilot::Tick(const float DeltaTime)
 	}
 
 	const float Distance = FVector::Dist(Ship->GetActorLocation(), Enemy->GetActorLocation());
-	if (Distance > CombatTestPilot::LockDistance)
+	// Backed out of the sector: a real player would turn back before the out-of-bounds timer kills them; the pilot
+	// jumps back to the fight instead.
+	if (Distance > CombatTestPilot::LockDistance || Ship->IsOutsideSector())
 	{
 		// Too far to lock. Flying there through the asteroid field is not what a session measures: jump to just
 		// outside the fight distance, facing it. The fight itself is flown and fired normally.
@@ -231,8 +374,11 @@ void UCombatTestPilot::Tick(const float DeltaTime)
 	{
 		Targeting->LockTarget(const_cast<UTargetableComponent*>(Targetable));
 	}
-	Ship->SetThrottleInput(Distance > FightDistance + CombatTestPilot::DistanceBand ? 1.f
+	bHolding |= Style == EPilotStyle::Hold && Distance <= FightDistance + CombatTestPilot::DistanceBand;
+	Ship->SetThrottleInput(Style == EPilotStyle::BackOff ? -BackOffThrottle : bHolding ? 0.f
+		: Distance > FightDistance + CombatTestPilot::DistanceBand ? 1.f
 		: Distance < FightDistance - CombatTestPilot::DistanceBand ? -1.f : 0.f);
+	Ship->SetSteerAxis(UpdateSteer(DeltaTime));
 
 	const UWeaponSystemComponent* const Weapons = Ship->GetWeaponSystem();
 	const bool bFire = Weapons && Distance <= Weapons->GetUsableWeaponRange();
@@ -278,11 +424,30 @@ namespace CombatTestPilotConsole
 
 		const float Seconds = Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 120.f;
 		const float DistanceM = Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 60.f;
-		Pilot->Start(Args[0], Seconds, DistanceM * 100.f);
+		Pilot->Start(Args[0], Seconds, DistanceM * 100.f, Args.IsValidIndex(4) ? FName(*Args[4]) : NAME_None);
 	}
 
+	/** Startech.Test.PilotStyle <face|circle|backoff> [Dodge=0|1] [BackOffThrottle=1] */
+	static void PilotStyle(const TArray<FString>& Args, UWorld* const World)
+	{
+		UCombatTestPilot* const Pilot = World ? World->GetSubsystem<UCombatTestPilot>() : nullptr;
+		if (!Pilot || Args.IsEmpty())
+		{
+			return;
+		}
+		const EPilotStyle Style = Args[0].Equals(TEXT("circle"), ESearchCase::IgnoreCase) ? EPilotStyle::Circle
+			: Args[0].Equals(TEXT("backoff"), ESearchCase::IgnoreCase) ? EPilotStyle::BackOff
+			: Args[0].Equals(TEXT("hold"), ESearchCase::IgnoreCase) ? EPilotStyle::Hold : EPilotStyle::Face;
+		Pilot->SetStyle(Style, Args.IsValidIndex(1) && FCString::Atoi(*Args[1]) != 0,
+			Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 1.f);
+	}
+
+	static FAutoConsoleCommandWithWorldAndArgs PilotStyleCommand(TEXT("Startech.Test.PilotStyle"),
+		TEXT("Startech.Test.PilotStyle <face|circle|backoff|hold> [Dodge=0|1] [BackOffThrottle=1]: how the test pilot flies its fights: hold the distance, hold it while strafing, reverse away at that throttle, or never touch the throttle; with Dodge it changes its strafe 0.3 s after a charged-shot telegraph starts against it."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PilotStyle));
+
 	static FAutoConsoleCommandWithWorldAndArgs AutoFightCommand(TEXT("Startech.Test.AutoFight"),
-		TEXT("Startech.Test.AutoFight <Type|Any|stop> [Seconds=120] [DistanceM=60] [AmmoTag]: flies the player into combat with the nearest enemy of Type (Drifter, Chaser, Ranged) until the time is up or the player dies."),
+		TEXT("Startech.Test.AutoFight <Type|Any|stop> [Seconds=120] [DistanceM=60] [AmmoTag] [Sector]: flies the player into combat with the nearest enemy of Type (Drifter, Chaser, Ranged) until the time is up. After a death it respawns, undocks and warps back to Sector (default: the current one) by itself."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&AutoFight));
 }
 

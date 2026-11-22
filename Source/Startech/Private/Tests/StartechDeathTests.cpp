@@ -17,87 +17,17 @@
 #include "StartechSettings.h"
 #include "StartechShipPawn.h"
 #include "TargetableComponent.h"
+#include "Tests/StartechTestWorld.h"
 
 namespace StartechDeathTests
 {
-	constexpr TCHAR DrifterClassPath[] = TEXT("/Game/Blueprints/BP_Enemy_Drifter.BP_Enemy_Drifter_C");
-	constexpr TCHAR PlayerClassPath[] = TEXT("/Game/Blueprints/BP_ShipPawn.BP_ShipPawn_C");
-	constexpr float Step = 1.f / 60.f;
-
-	/**
-	 * A game world whose actors begin play, with its subsystems (pool, despawn, respawn) but no sector, ticked by hand. Actors spawned
-	 * in it begin play at once. Destroyed when it goes out of scope.
-	 */
-	struct FDeathWorld
-	{
-		FDeathWorld()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("StartechDeathTestWorld"));
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-			Context.SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL());
-			// Not World->BeginPlay: the subsystems' OnWorldBeginPlay would start the start flow, which generates the
-			// home sector. Actors spawned from now on still begin play.
-			World->SetBegunPlay(true);
-		}
-
-		~FDeathWorld()
-		{
-			GEngine->DestroyWorldContext(World);
-			World->DestroyWorld(false);
-		}
-
-		void Tick(const float Seconds) const
-		{
-			for (float Done = 0.f; Done < Seconds; Done += Step)
-			{
-				World->Tick(LEVELTICK_All, Step);
-			}
-		}
-
-		/** Visible loot pickups in play. */
-		TArray<ALootPickup*> GetPickups() const
-		{
-			TArray<ALootPickup*> Pickups;
-			for (TActorIterator<ALootPickup> It(World); It; ++It)
-			{
-				if (!It->IsHidden())
-				{
-					Pickups.Add(*It);
-				}
-			}
-			return Pickups;
-		}
-
-		/** True if a 50 cm sphere swept along X through Target's location on Channel hits Target. */
-		bool SweepHits(const AActor& Target, const ECollisionChannel Channel) const
-		{
-			const FVector Center = Target.GetActorLocation();
-			TArray<FHitResult> Hits;
-			World->SweepMultiByChannel(Hits, Center - FVector(20000.f, 0.f, 0.f), Center + FVector(20000.f, 0.f, 0.f),
-				FQuat::Identity, Channel, FCollisionShape::MakeSphere(50.f));
-			return Hits.ContainsByPredicate([&Target](const FHitResult& Hit) { return Hit.GetActor() == &Target; });
-		}
-
-		UWorld* World = nullptr;
-	};
-
-	/** Hull to 0 at once, through the health component, like the killing shot. */
-	void Kill(const AStartechShipBase& Ship)
-	{
-		Ship.GetHealthComponent()->ApplyDirectDamage(1.e7f, 1.e7f, Ship.GetActorLocation());
-	}
-
-	UClass* LoadShipClass(FAutomationTestBase& Test, const TCHAR* const Path)
-	{
-		UClass* const Class = LoadClass<AStartechShipBase>(nullptr, Path);
-		Test.TestNotNull(FString::Printf(TEXT("%s loads"), Path), Class);
-		return Class;
-	}
+	using namespace StartechTestWorld;
+	using FDeathWorld = StartechTestWorld::FTestWorld;
 
 	bool SameResponses(const FCollisionResponseContainer& A, const FCollisionResponseContainer& B)
 	{
-		for (int32 Channel = 0; Channel < ECC_MAX; ++Channel)
+		// The response container holds 32 channels (ECC_MAX counts more).
+		for (int32 Channel = 0; Channel < 32; ++Channel)
 		{
 			if (A.GetResponse(static_cast<ECollisionChannel>(Channel)) != B.GetResponse(static_cast<ECollisionChannel>(Channel)))
 			{
@@ -133,14 +63,8 @@ bool FStartechDeathEnemyTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const FVector StartLocation = Enemy->GetActorLocation();
-	Fixture.Tick(0.1f);
-	AddInfo(FString::Printf(TEXT("diag: init %d actorsInit %d begun %d actorBegun %d tickReg %d tickEnabled %d moved %s physScene %d collision %d mesh %s"),
-		Fixture.World->bIsWorldInitialized, Fixture.World->AreActorsInitialized(), Fixture.World->HasBegunPlay(),
-		Enemy->HasActorBegunPlay(), Enemy->PrimaryActorTick.IsTickFunctionRegistered(), Enemy->PrimaryActorTick.IsTickFunctionEnabled(),
-		*(Enemy->GetActorLocation() - StartLocation).ToCompactString(), Fixture.World->GetPhysicsScene() != nullptr,
-		static_cast<int32>(Cast<UPrimitiveComponent>(Enemy->GetRootComponent())->GetCollisionEnabled()),
-		*GetNameSafe(Cast<UStaticMeshComponent>(Enemy->GetRootComponent())->GetStaticMesh())));
+	// Long enough for the physics scene to take the new body into its queries.
+	Fixture.Tick(0.5f);
 
 	UTargetableComponent* const Targetable = Enemy->FindComponentByClass<UTargetableComponent>();
 	TestTrue(TEXT("alive: targetable"), Targetable && Targetable->IsTargetable());
@@ -168,10 +92,6 @@ bool FStartechDeathEnemyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no loot at hull 0"), Fixture.GetPickups().Num(), 0);
 
 	Fixture.Tick(GetDuration() * 0.5f);
-	AddInfo(FString::Printf(TEXT("diag2: time %.3f real %.3f paused %d elapsed %.3f deathTickReg %d deathTickEnabled %d collections %d"),
-		Fixture.World->GetTimeSeconds(), Fixture.World->GetRealTimeSeconds(), Fixture.World->IsPaused(), Enemy->GetShipDeath()->GetElapsed(),
-		Enemy->GetShipDeath()->PrimaryComponentTick.IsTickFunctionRegistered(), Enemy->GetShipDeath()->IsComponentTickEnabled(),
-		Fixture.World->GetLevelCollections().Num()));
 	TestTrue(TEXT("halfway: still dying"), Enemy->GetShipDeath()->IsDying());
 	TestFalse(TEXT("halfway: visible"), Enemy->IsHidden());
 	TestTrue(TEXT("halfway: tumbling"), Enemy->GetShipDeath()->GetTumbleRate() > 0.f);

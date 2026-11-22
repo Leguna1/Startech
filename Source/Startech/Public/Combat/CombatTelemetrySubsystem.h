@@ -4,6 +4,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "CombatTelemetrySubsystem.generated.h"
 
+class AChargedShotProjectile;
 class AActor;
 class AStartechEnemyShip;
 class UAmmoData;
@@ -83,6 +84,11 @@ struct STARTECH_API FCombatEngagement
 	float ShieldTaken = 0.f;
 	float HullTaken = 0.f;
 
+	/** Its charged shots, those that hit the player, and their damage (part of the damage above). */
+	int32 ChargedFired = 0;
+	int32 ChargedHit = 0;
+	float ChargedDamage = 0.f;
+
 	/** The death drop: credits, item sell value (UCombatBalance::GetBundleValue) and ammo rounds. */
 	int32 Credits = 0;
 	double LootValue = 0.0;
@@ -128,6 +134,9 @@ public:
 	/** The session summary, one line per enemy type and tier, then the totals. */
 	TArray<FString> BuildReport() const;
 
+	/** Starts a new session: forgets open and finished engagements (the CSV keeps them). For measuring styles apart. */
+	void ResetSession();
+
 	/** Engagements finished this session, oldest first. */
 	const TArray<FCombatEngagement>& GetFinished() const { return Finished; }
 
@@ -145,6 +154,8 @@ private:
 	void HandleDamage(const UHealthComponent& Health, float ShieldDamage, float HullDamage, AActor* Instigator,
 		bool bShieldDrain, bool bFatal);
 	void HandleEnemyDied(AStartechEnemyShip& Enemy, AActor* Killer);
+	void HandleChargedShotFired(const AChargedShotProjectile& Projectile);
+	void HandleChargedShotEnded(const AChargedShotProjectile& Projectile, AActor* HitActor, bool bDamaged);
 
 	/** The player pawn of this world, or null. */
 	AActor* GetPlayer() const;
@@ -172,4 +183,6 @@ private:
 	FDelegateHandle ShotHandle;
 	FDelegateHandle DamageHandle;
 	FDelegateHandle DeathHandle;
+	FDelegateHandle ChargedFiredHandle;
+	FDelegateHandle ChargedEndedHandle;
 };

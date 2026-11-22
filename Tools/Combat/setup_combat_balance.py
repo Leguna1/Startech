@@ -72,15 +72,89 @@ TOUGH = "TOUGH"
 WEAK = "WEAK"
 
 # (tag, data asset suffix, hull, shield, weapon, damage per shot, preferred range cm, reward multiplier,
-#  [(tier, role)]). Preferred range × 1.1 (the brain's RangeTolerance) must stay inside the weapon's range.
+#  [(tier, role)]). Preferred range Ã— 1.1 (the brain's RangeTolerance) must stay inside the weapon's range.
 ENEMIES = [
     ("Enemy.Drifter", "Drifter", 150.0, 200.0, "DA_BasicWeapon_Drifter", 1.0, 6500.0, 1.0,
      [(1, REGULAR), (2, WEAK), (3, WEAK), (4, WEAK)]),
-    ("Enemy.Chaser", "Chaser", 372.0, 372.0, "DA_BasicWeapon_Chaser", 1.25, 3600.0, 2.0,
+    ("Enemy.Chaser", "Chaser", 372.0, 372.0, "DA_BasicWeapon_Chaser", 1.9, 3300.0, 2.0,
      [(2, REGULAR), (3, REGULAR), (4, REGULAR)]),
-    ("Enemy.Ranged", "Ranged", 500.0, 500.0, "DA_BasicWeapon_Ranger", 1.4, 9000.0, 3.0,
+    ("Enemy.Ranged", "Ranged", 500.0, 500.0, "DA_BasicWeapon_Ranger", 0.7, 9000.0, 3.0,
      [(2, TOUGH), (3, TOUGH), (4, TOUGH)]),
 ]
+
+# Behaviour per type (FEnemyBehaviourBalance). Missing keys keep the struct's default (0 = off, or the EnemyData value).
+#   forward_speed        cm/s (also written to the EnemyData); 0 keeps EnemyData's
+#   forward_speed_by_tier  [tier I, II, III, IV] cm/s; 0 entries use forward_speed. The chaser matches the player's
+#                        reverse at the expected Engines level (2500 / 2950 / 3250 in tiers II / III / IV), so backing off
+#                        holds distance rather than gaining it, and stays slower than the boost once afterburning.
+#   home_leash_range     cm from home (also written to the EnemyData); 0 keeps EnemyData's
+#   leash_quiet_seconds  give up after this long without damage (dealt counts too with quiet_counts_dealt)
+#   leash_far_range_factor / leash_far_seconds   give up after N s with the player beyond factor x laser range
+#   circle               strafe round the player in range, approach a flank point out of range
+#   afterburn_*          multiplier (x forward speed), seconds, cooldown, trigger factor (x laser range)
+#   retreat_fraction     within this x preferred range it turns and flees without firing, until back at preferred range
+#   charged_shot         telegraphed, dodgeable projectile; charge_* / charged_shot_* are its numbers. Damage is before
+#                        the tier multiplier: started at 40 (about 2.5 s of the ranged enemy's old normal fire, with its
+#                        normal shot halved to 0.7); Phase 3 set it to 45: the TTK table's all-hit rows land at 26-30%
+#                        and live fights with nothing dodged about 24-27% (a third of charged shots miss a player who
+#                        holds still).
+BEHAVIOUR = {
+    "Enemy.Drifter": dict(leash_quiet_seconds=20.0, leash_far_range_factor=2.0, leash_far_seconds=8.0),
+    "Enemy.Chaser": dict(forward_speed=2400.0, forward_speed_by_tier=[0.0, 2500.0, 2950.0, 3250.0], home_leash_range=30000.0, leash_quiet_seconds=25.0,
+                         quiet_counts_dealt=True, circle=True, afterburn_multiplier=1.8, afterburn_seconds=4.5,
+                         afterburn_cooldown=4.0, afterburn_trigger_factor=1.0),
+    "Enemy.Ranged": dict(retreat_fraction=0.4, charged_shot=True, charge_first_delay_min=2.0, charge_first_delay_max=3.0,
+                         charge_interval_min=6.0, charge_interval_max=8.0, charge_telegraph_seconds=1.2,
+                         charged_shot_damage=45.0, charged_shot_speed=12500.0, charged_shot_radius=150.0,
+                         charged_shot_lifetime=2.0),
+}
+
+# TTK table only (FEnemyBalance): measured fire uptime (share of a fight the lasers fire; Startech.Combat.Report's
+# Uptime column), the uptime in the type's second case (chaser: the player backs off), and the type's own one-fight
+# loss targets (second case: every charged shot dodged / the player backs off). regular_only: held only where the type
+# is the Regular role. alt_info_only: the second case's target is shown for information and never fails the test.
+TABLE = {
+    # Uptimes measured in the Phase 3 sessions (TASK_CombatBalance2_Phase3.md): drifter 61% (tier I); chaser 58-78%
+    # engaged (face/circle, tiers II-IV), 15-17% against a player backing off in tier II; ranged 70-85%.
+    # Chaser with its 45 m gun and per-tier speed (Phase 3 review 2): 38-72% engaged, 10-32% backing off met in aggro range (0.22 average).
+    # Its back-off value is information only (alt_info_only): tiers III-IV were accepted under it, and back-off fights
+    # vary 3-5 points between sessions (TASK_CombatBalance2_Phase3_Final.md).
+    "Enemy.Drifter": dict(fire_uptime=0.61, loss_target=(0.05, 0.15), regular_only=True),
+    "Enemy.Chaser": dict(fire_uptime=0.65, fire_uptime_alt=0.22, loss_target=(0.20, 0.25), loss_alt_target=(0.10, 0.15),
+                         alt_info_only=True),
+    "Enemy.Ranged": dict(fire_uptime=0.77, loss_target=(0.25, 0.30), loss_alt_target=(0.12, 0.18)),
+}
+
+BEHAVIOUR_PROPERTIES = {
+    "forward_speed": "forward_speed",
+    "forward_speed_by_tier": "forward_speed_by_tier",
+    "home_leash_range": "home_leash_range",
+    "leash_quiet_seconds": "leash_quiet_seconds",
+    "quiet_counts_dealt": "quiet_counts_dealt_damage",
+    "leash_far_range_factor": "leash_far_range_factor",
+    "leash_far_seconds": "leash_far_seconds",
+    "circle": "circle",
+    "afterburn_multiplier": "afterburn_multiplier",
+    "afterburn_seconds": "afterburn_seconds",
+    "afterburn_cooldown": "afterburn_cooldown",
+    "afterburn_trigger_factor": "afterburn_trigger_factor",
+    "retreat_fraction": "retreat_fraction",
+    "charged_shot": "charged_shot",
+    "charge_first_delay_min": "charge_first_delay_min",
+    "charge_first_delay_max": "charge_first_delay_max",
+    "charge_interval_min": "charge_interval_min",
+    "charge_interval_max": "charge_interval_max",
+    "charge_telegraph_seconds": "charge_telegraph_seconds",
+    "charged_shot_damage": "charged_shot_damage",
+    "charged_shot_speed": "charged_shot_speed",
+    "charged_shot_radius": "charged_shot_radius",
+    "charged_shot_lifetime": "charged_shot_lifetime",
+}
+
+# Enemy weapon ranges set by the enemies step, cm (others keep their asset's). The chaser's 45 m gun: Phase 3 review.
+WEAPON_RANGE = {
+    "DA_BasicWeapon_Chaser": 4500.0,
+}
 
 # (tier, ammo, lasers level, hull level, shield level, min TTK, max TTK, tolerance s, check damage)
 GEAR_CASES = [
@@ -201,6 +275,21 @@ def setup_balance():
             appearance.set_editor_property("role", getattr(unreal.CombatRole, role))
             appearances.append(appearance)
         entry.set_editor_property("appearances", appearances)
+        behaviour = unreal.EnemyBehaviourBalance()
+        for key, value in BEHAVIOUR.get(enemy_tag, {}).items():
+            behaviour.set_editor_property(BEHAVIOUR_PROPERTIES[key], value)
+        entry.set_editor_property("behaviour", behaviour)
+        table = TABLE.get(enemy_tag, {})
+        entry.set_editor_property("fire_uptime", table.get("fire_uptime", 1.0))
+        entry.set_editor_property("fire_uptime_alt", table.get("fire_uptime_alt", 1.0))
+        low, high = table.get("loss_target", (0.0, 0.0))
+        entry.set_editor_property("loss_target_min", low)
+        entry.set_editor_property("loss_target_max", high)
+        low, high = table.get("loss_alt_target", (0.0, 0.0))
+        entry.set_editor_property("loss_alt_target_min", low)
+        entry.set_editor_property("loss_alt_target_max", high)
+        entry.set_editor_property("loss_targets_regular_only", table.get("regular_only", False))
+        entry.set_editor_property("loss_alt_target_info_only", table.get("alt_info_only", False))
         enemies.append(entry)
     balance.set_editor_property("enemies", enemies)
 
@@ -249,6 +338,14 @@ def setup_balance():
             entry.get_editor_property("shield"), entry.get_editor_property("laser_weapon").get_name(),
             entry.get_editor_property("damage_per_shot"), entry.get_editor_property("preferred_range"),
             entry.get_editor_property("reward_multiplier"), len(entry.get_editor_property("appearances"))))
+        report("balance: %s table: uptime %.2f / %.2f, loss %.2f-%.2f, alt %.2f-%.2f" % (
+            tag_name(entry.get_editor_property("enemy_tag")), entry.get_editor_property("fire_uptime"),
+            entry.get_editor_property("fire_uptime_alt"), entry.get_editor_property("loss_target_min"),
+            entry.get_editor_property("loss_target_max"), entry.get_editor_property("loss_alt_target_min"),
+            entry.get_editor_property("loss_alt_target_max")))
+        behaviour = entry.get_editor_property("behaviour")
+        report("balance: %s behaviour %s" % (tag_name(entry.get_editor_property("enemy_tag")), ", ".join(
+            "%s=%s" % (key, behaviour.get_editor_property(prop)) for key, prop in BEHAVIOUR_PROPERTIES.items())))
     report("balance: %d ammo, %d gear case(s), ship %s" % (
         len(balance.get_editor_property("ammo")), len(balance.get_editor_property("gear_cases")),
         balance.get_editor_property("player_ship_class")))
@@ -269,19 +366,27 @@ def setup_ammo():
 
 
 def setup_enemies():
-    for _, suffix, hull, shield, weapon_name, damage, preferred, _, _ in ENEMIES:
+    for enemy_tag, suffix, hull, shield, weapon_name, damage, preferred, _, _ in ENEMIES:
         weapon = load(WEAPONS + weapon_name)
         weapon.set_editor_property("damage", damage)
+        if weapon_name in WEAPON_RANGE:
+            weapon.set_editor_property("range", WEAPON_RANGE[weapon_name])
         save(weapon)
         data = load(ENEMY_DATA + suffix)
         data.set_editor_property("max_hull", hull)
         data.set_editor_property("max_shield", shield)
         data.set_editor_property("laser_weapon", weapon)
         data.set_editor_property("preferred_range", preferred)
+        behaviour = BEHAVIOUR.get(enemy_tag, {})
+        if behaviour.get("forward_speed", 0.0) > 0.0:
+            data.set_editor_property("max_forward_speed", behaviour["forward_speed"])
+        if behaviour.get("home_leash_range", 0.0) > 0.0:
+            data.set_editor_property("leash_range", behaviour["home_leash_range"])
         save(data)
-        report("enemies: %s hull %.0f shield %.0f %s (dmg %.2f, %.1f/s, %.0f m) preferred %.0f m" % (
+        report("enemies: %s hull %.0f shield %.0f %s (dmg %.2f, %.1f/s, %.0f m) preferred %.0f m, speed %.0f, leash %.0f m" % (
             suffix, hull, shield, weapon_name, weapon.get_editor_property("damage"),
-            weapon.get_editor_property("fire_rate"), weapon.get_editor_property("range") / 100.0, preferred / 100.0))
+            weapon.get_editor_property("fire_rate"), weapon.get_editor_property("range") / 100.0, preferred / 100.0,
+            data.get_editor_property("max_forward_speed"), data.get_editor_property("leash_range") / 100.0))
 
 
 def setup_shop():

@@ -321,6 +321,20 @@ bool FStartechCombatTTKTargetsTest::RunTest(const FString& Parameters)
 			AddError(FString::Printf(TEXT("%s: one fight costs %.1f%% of health, outside %.0f-%.0f%%"), *Where,
 				Row.LoseOne * 100.f, Row.AllowedMinLoss * 100.f, Row.AllowedMaxLoss * 100.f));
 		}
+		// Information only (the chaser's back-off value): printed, never failing.
+		if (Row.bAltTargetInfoOnly && Row.LoseAlt >= 0.f)
+		{
+			const FString Aim = Row.AllowedMaxAltLoss > 0.f
+				? FString::Printf(TEXT("aim %.0f-%.0f%%"), Row.AllowedMinAltLoss * 100.f, Row.AllowedMaxAltLoss * 100.f)
+				: FString(TEXT("no target"));
+			AddInfo(FString::Printf(TEXT("%s: %s costs %.1f%% of health (information; %s)"), *Where, *Row.AltCase,
+				Row.LoseAlt * 100.f, *Aim));
+		}
+		if (Row.bAltLossOutside)
+		{
+			AddError(FString::Printf(TEXT("%s: %s costs %.1f%% of health, outside %.0f-%.0f%%"), *Where, *Row.AltCase,
+				Row.LoseAlt * 100.f, Row.AllowedMinAltLoss * 100.f, Row.AllowedMaxAltLoss * 100.f));
+		}
 		if (Row.bCostOutside)
 		{
 			AddError(FString::Printf(TEXT("%s: ammo costs %.1f%% of the kill's value, over %.0f%%"), *Where,

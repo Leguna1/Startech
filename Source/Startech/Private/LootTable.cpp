@@ -9,7 +9,8 @@ namespace
 	// Zero when the chance fails, otherwise a count in [Min, Max]. Max below Min counts as Min.
 	int32 RollCount(const float Chance, const int32 Min, const int32 Max)
 	{
-		if (Chance <= 0.f || FMath::FRand() >= Chance)
+		// FRand can return exactly 1, so a chance of 1 is checked apart: it always succeeds.
+		if (Chance <= 0.f || (Chance < 1.f && FMath::FRand() >= Chance))
 		{
 			return 0;
 		}
@@ -118,7 +119,8 @@ FLootBundle ULootTable::Roll(const FLootRollModifiers& Modifiers) const
 		}
 	}
 
-	if (bWeightedMinerals && MineralChance > 0.f && FMath::FRand() < MineralChance)
+	// FRand can return exactly 1, so a chance of 1 always succeeds.
+	if (bWeightedMinerals && MineralChance > 0.f && (MineralChance >= 1.f || FMath::FRand() < MineralChance))
 	{
 		float Pick = FMath::FRand() * TotalWeight;
 		int32 Chosen = WeightedMinerals.Num() - 1;

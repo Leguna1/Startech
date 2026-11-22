@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "Boost/ShipBoostSettings.h"
+#include "Combat/ChargedShotTypes.h"
 #include "Death/ShipDeathTypes.h"
 #include "GameplayTagContainer.h"
 #include "Save/StartechSaveTypes.h"
@@ -63,6 +64,10 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Combat")
 	FShipDeathSettings Death;
+
+	/** The ranged enemy's charged shot: telegraph glow and the effect and sound hooks (its numbers are in DA_CombatBalance). */
+	UPROPERTY(Config, EditAnywhere, Category = "Combat")
+	FChargedShotEffects ChargedShot;
 
 	/** Every combat balance number: DA_CombatBalance (UCombatBalance::Get). */
 	UPROPERTY(Config, EditAnywhere, Category = "Combat")

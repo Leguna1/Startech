@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "Population/Poolable.h"
+#include "Combat/CombatBalance.h"
 #include "LootBundle.h"
 #include "StartechShipBase.h"
 #include "StartechEnemyShip.generated.h"
 
 class ALootPickup;
 class UEnemyBrainComponent;
+class UEnemyChargeComponent;
 class UEnemyData;
 class ULaserWeaponData;
 class UMapMarkerComponent;
@@ -34,6 +36,14 @@ public:
 
 	const UEnemyData* GetEnemyData() const { return EnemyData; }
 
+	const UEnemyBrainComponent* GetBrain() const { return Brain; }
+
+	/** The charged shot (used only by types with FEnemyBehaviourBalance::bChargedShot). */
+	UEnemyChargeComponent* GetChargedShot() const { return ChargedShot; }
+
+	/** This life's tier damage multiplier (UStartechSettings::TierData's EnemyDamageMultiplier). */
+	float GetLifeDamageMultiplier() const { return LifeDamageMultiplier; }
+
 	/** The tier of the sector this life began in (see LifeTier). */
 	int32 GetLifeTier() const { return LifeTier; }
 
@@ -42,6 +52,12 @@ public:
 
 	/** The distance kept from the player while engaged, in cm: DA_CombatBalance's, else EnemyData's. */
 	float GetPreferredRange() const { return LifePreferredRange; }
+
+	/** This life's behaviour numbers: DA_CombatBalance's for the type, else defaults (everything off). */
+	const FEnemyBehaviourBalance& GetBehaviour() const { return LifeBehaviour; }
+
+	/** Gives up once the player is this far from home, in cm: DA_CombatBalance's HomeLeashRange, else EnemyData's. */
+	float GetHomeLeashRange() const { return LifeHomeLeashRange; }
 
 	/** Credits and loot amounts of the death drop × this: DA_CombatBalance's RewardMultiplier, else 1. */
 	float GetRewardMultiplier() const { return LifeRewardMultiplier; }
@@ -78,6 +94,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Enemy")
 	TObjectPtr<UEnemyBrainComponent> Brain;
+
+	// The ranged type's charged shot; idle for the others.
+	UPROPERTY(VisibleAnywhere, Category = "Enemy")
+	TObjectPtr<UEnemyChargeComponent> ChargedShot;
 
 	// Radar only. Disabled on death.
 	UPROPERTY(VisibleAnywhere, Category = "Enemy")
@@ -138,6 +158,16 @@ private:
 
 	/** See GetRewardMultiplier. Set by ApplyStats. */
 	float LifeRewardMultiplier = 1.f;
+
+	/** See GetBehaviour. Set by ApplyStats. */
+	UPROPERTY(Transient)
+	FEnemyBehaviourBalance LifeBehaviour;
+
+	/** See GetHomeLeashRange. Set by ApplyStats. */
+	float LifeHomeLeashRange = 0.f;
+
+	/** See GetLifeDamageMultiplier. Set by ApplyStats. */
+	float LifeDamageMultiplier = 1.f;
 
 	/** See GetLastDrop. Cleared by ApplyStats, set by RollLoot. */
 	UPROPERTY(Transient)

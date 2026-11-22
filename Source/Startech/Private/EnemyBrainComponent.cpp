@@ -1,5 +1,8 @@
 #include "EnemyBrainComponent.h"
 
+#include "Combat/CombatBalance.h"
+#include "Combat/EnemyChargeComponent.h"
+#include "Engine/World.h"
 #include "EnemyData.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
@@ -25,6 +28,9 @@ void UEnemyBrainComponent::BeginPlay()
 		// The owner's damage event, rather than the health component's, because it says who did it.
 		Owner->OnTakeAnyDamage.AddDynamic(this, &UEnemyBrainComponent::HandleOwnerDamaged);
 	}
+
+	// Damage this enemy deals, for the quiet leash. Native and static, so pooling never leaves it bound twice.
+	AnyDamageHandle = UHealthComponent::OnAnyDamageApplied.AddUObject(this, &UEnemyBrainComponent::HandleAnyDamage);
 }
 
 void UEnemyBrainComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -33,18 +39,24 @@ void UEnemyBrainComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Owner->OnTakeAnyDamage.RemoveDynamic(this, &UEnemyBrainComponent::HandleOwnerDamaged);
 	}
+	UHealthComponent::OnAnyDamageApplied.Remove(AnyDamageHandle);
+	AnyDamageHandle.Reset();
 
 	Super::EndPlay(EndPlayReason);
 }
 
 void UEnemyBrainComponent::StopBrain()
 {
+	StopAfterburn(false);
+	CancelCharge();
+	bRetreating = false;
 	bStopped = true;
 	SetComponentTickEnabled(false);
 }
 
 void UEnemyBrainComponent::ResetBrain(const FVector& Home)
 {
+	StopAfterburn(false);
 	bStopped = false;
 	State = EBrainState::Idle;
 	HomeLocation = Home;
@@ -52,7 +64,33 @@ void UEnemyBrainComponent::ResetBrain(const FVector& Home)
 	bHasWanderPoint = false;
 	StrafeDirection = 1.f;
 	StrafeSwapTimeLeft = 0.f;
+	QuietTime = 0.f;
+	FarTime = 0.f;
+	AfterburnLeft = 0.f;
+	AfterburnCooldownLeft = 0.f;
+	bRetreating = false;
+	ChargeWaitLeft = 0.f;
+	CancelCharge();
+	LastGiveUpReason = TEXT("");
 	SetComponentTickEnabled(true);
+}
+
+const TCHAR* UEnemyBrainComponent::GetStateName() const
+{
+	if (bStopped)
+	{
+		return TEXT("stopped");
+	}
+
+	switch (State)
+	{
+	case EBrainState::Engage:
+		return TEXT("engage");
+	case EBrainState::ReturnHome:
+		return TEXT("return");
+	default:
+		return TEXT("idle");
+	}
 }
 
 void UEnemyBrainComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -67,11 +105,16 @@ void UEnemyBrainComponent::TickComponent(const float DeltaTime, const ELevelTick
 		return;
 	}
 
+	if (!bAfterburning)
+	{
+		AfterburnCooldownLeft = FMath::Max(AfterburnCooldownLeft - DeltaTime, 0.f);
+	}
+
 	// With no living player, combat logic is skipped; the ship still goes home and idles.
 	const APawn* const Player = GetLivingPlayer();
 	if (!Player && State == EBrainState::Engage)
 	{
-		SetState(EBrainState::ReturnHome);
+		GiveUp(*Ship, TEXT("no player"), DeltaTime);
 	}
 
 	switch (State)
@@ -122,49 +165,78 @@ void UEnemyBrainComponent::TickIdle(AStartechEnemyShip& Ship, const UEnemyData& 
 void UEnemyBrainComponent::TickEngage(AStartechEnemyShip& Ship, const UEnemyData& Data, const APawn& Player,
 	const float DeltaSeconds)
 {
+	const FEnemyBehaviourBalance& Behaviour = Ship.GetBehaviour();
 	const FVector ShipLocation = Ship.GetActorLocation();
 	const FVector PlayerLocation = Player.GetActorLocation();
+	const float Distance = FVector::Dist(ShipLocation, PlayerLocation);
+	// The ship's preferred range and laser are this life's (DA_CombatBalance), not EnemyData's.
+	const ULaserWeaponData* const Laser = Ship.GetLaserWeapon();
+	const float LaserRange = Laser ? Laser->Range : 0.f;
 
-	if (FVector::DistSquared(PlayerLocation, HomeLocation) > FMath::Square(Data.LeashRange))
+	if (UpdateLeash(Ship, Behaviour, Distance, LaserRange, PlayerLocation, DeltaSeconds))
+	{
+		return;
+	}
+
+	const float PredictedDistance = GetPredictedDistance(Ship, Player, Distance, 0.f);
+	UpdateAfterburn(Ship, Behaviour, Distance, PredictedDistance, LaserRange, DeltaSeconds);
+
+	if (UpdateRetreat(Ship, Data, Behaviour, PlayerLocation, Distance, DeltaSeconds))
+	{
+		return;
+	}
+
+	// A circler out of range heads for a point beside the player, so it arrives circling instead of crossing the
+	// player's path. Nothing to shoot at from there.
+	if (Behaviour.bCircle && LaserRange > 0.f && Distance > LaserRange)
 	{
 		HoldFire(Ship, DeltaSeconds);
-		SetState(EBrainState::ReturnHome);
+		const FVector Flank = GetFlankPoint(Ship, PlayerLocation);
+		Ship.SetFacingLocation(Flank, Data.TurnRate);
+		Ship.SetTurnInput(0.f);
+		Ship.SetStrafeInput(0.f);
+
+		// Full throttle once the nose is round, as FlyToward does; braking early if it would overshoot the range.
+		const FVector ToFlank = Flank - ShipLocation;
+		const FVector Flat(ToFlank.X, ToFlank.Y, 0.f);
+		const FVector LevelForward = FRotator(0.f, Ship.GetActorRotation().Yaw, 0.f).Vector();
+		Ship.SetThrottleInput(PredictedDistance < Ship.GetPreferredRange() ? -1.f
+			: FMath::Max(FVector::DotProduct(LevelForward, Flat.GetSafeNormal()), 0.f));
+		Ship.SetVerticalInput(GetVerticalIntent(PlayerLocation.Z - ShipLocation.Z));
 		return;
 	}
 
 	Ship.SetFacingLocation(PlayerLocation, Data.TurnRate);
 	Ship.SetTurnInput(0.f);
 
-	// Close in or back off to PreferredRange, with a dead band so it doesn't jitter at the edge.
-	const float Distance = FVector::Dist(ShipLocation, PlayerLocation);
-	// The ship's preferred range and laser are this life's (DA_CombatBalance), not EnemyData's.
+	// Close in or back off to PreferredRange, with a dead band so it doesn't jitter at the edge. Backing off as soon as
+	// its stopping point is inside the band keeps a fast ship (an afterburner) from overshooting into the player.
 	const float PreferredRange = Ship.GetPreferredRange();
 	const float Band = PreferredRange * RangeTolerance;
-	const float Throttle = Distance > PreferredRange + Band ? 1.f
-		: Distance < PreferredRange - Band ? -1.f
+	const float Throttle = PredictedDistance < PreferredRange - Band ? -1.f
+		: Distance > PreferredRange + Band ? 1.f
 		: 0.f;
 	Ship.SetThrottleInput(Throttle);
 
 	Ship.SetVerticalInput(GetVerticalIntent(PlayerLocation.Z - ShipLocation.Z));
 
-	if (Data.Behavior == EEnemyBehavior::Ranged)
+	if (Data.Behavior == EEnemyBehavior::Ranged || Behaviour.bCircle)
 	{
-		StrafeSwapTimeLeft -= DeltaSeconds;
-		if (StrafeSwapTimeLeft <= 0.f)
-		{
-			StrafeDirection = -StrafeDirection;
-			StrafeSwapTimeLeft = PickStrafeSwapTime();
-		}
-		Ship.SetStrafeInput(StrafeDirection);
+		UpdateStrafe(Ship, DeltaSeconds);
 	}
 	else
 	{
 		Ship.SetStrafeInput(0.f);
 	}
 
-	// Fire only with the player in laser range and inside the cone off the nose.
-	const ULaserWeaponData* const Laser = Ship.GetLaserWeapon();
-	const bool bInRange = Laser && Distance <= Laser->Range;
+	// Fire only with the player in laser range and inside the cone off the nose, and not while charging a shot.
+	const bool bInRange = LaserRange > 0.f && Distance <= LaserRange;
+	if (UpdateCharge(Ship, Behaviour, Player, bInRange, DeltaSeconds))
+	{
+		HoldFire(Ship, DeltaSeconds);
+		return;
+	}
+
 	const FVector ToPlayer = (PlayerLocation - ShipLocation).GetSafeNormal();
 	const float ConeCos = FMath::Cos(FMath::DegreesToRadians(Data.FiringConeHalfAngle));
 	const bool bInCone = FVector::DotProduct(Ship.GetActorForwardVector(), ToPlayer) >= ConeCos;
@@ -173,6 +245,221 @@ void UEnemyBrainComponent::TickEngage(AStartechEnemyShip& Ship, const UEnemyData
 	{
 		Weapons->UpdateFiring(bInRange && bInCone, PlayerLocation, DeltaSeconds);
 	}
+}
+
+bool UEnemyBrainComponent::UpdateLeash(AStartechEnemyShip& Ship, const FEnemyBehaviourBalance& Behaviour,
+	const float Distance, const float LaserRange, const FVector& PlayerLocation, const float DeltaSeconds)
+{
+	if (FVector::DistSquared(PlayerLocation, HomeLocation) > FMath::Square(Ship.GetHomeLeashRange()))
+	{
+		GiveUp(Ship, TEXT("home"), DeltaSeconds);
+		return true;
+	}
+
+	QuietTime += DeltaSeconds;
+	if (Behaviour.LeashQuietSeconds > 0.f && QuietTime >= Behaviour.LeashQuietSeconds)
+	{
+		GiveUp(Ship, TEXT("quiet"), DeltaSeconds);
+		return true;
+	}
+
+	if (Behaviour.LeashFarRangeFactor > 0.f && LaserRange > 0.f)
+	{
+		FarTime = Distance > LaserRange * Behaviour.LeashFarRangeFactor ? FarTime + DeltaSeconds : 0.f;
+		if (FarTime >= Behaviour.LeashFarSeconds)
+		{
+			GiveUp(Ship, TEXT("far"), DeltaSeconds);
+			return true;
+		}
+	}
+	return false;
+}
+
+float UEnemyBrainComponent::GetPredictedDistance(const AStartechEnemyShip& Ship, const APawn& Player, const float Distance,
+	const float SlowToSpeed)
+{
+	const AStartechShipBase* const PlayerShip = Cast<AStartechShipBase>(&Player);
+	const FVector PlayerVelocity = PlayerShip ? PlayerShip->GetShipVelocity() : FVector::ZeroVector;
+	const FVector ToPlayer = (Player.GetActorLocation() - Ship.GetActorLocation()).GetSafeNormal();
+	const float Closing = FVector::DotProduct(Ship.GetShipVelocity() - PlayerVelocity, ToPlayer);
+	// The closing speed it keeps once slowed to SlowToSpeed (straight at the player).
+	const float ClosingAfter = FMath::Max(SlowToSpeed - FVector::DotProduct(PlayerVelocity, ToPlayer), 0.f);
+	if (Closing <= ClosingAfter)
+	{
+		return Distance;
+	}
+	return Distance - (FMath::Square(Closing) - FMath::Square(ClosingAfter)) / (2.f * FMath::Max(Ship.GetAcceleration(), 1.f));
+}
+
+void UEnemyBrainComponent::UpdateAfterburn(AStartechEnemyShip& Ship, const FEnemyBehaviourBalance& Behaviour,
+	const float Distance, const float PredictedDistance, const float LaserRange, const float DeltaSeconds)
+{
+	if (bAfterburning)
+	{
+		AfterburnLeft -= DeltaSeconds;
+		// Ends on reaching its preferred range: deep enough inside its gun that a player backing off a little faster than
+		// its normal speed takes seconds to get out again. It never runs into the player: the range band's braking (on
+		// the predicted stopping point) acts during a burn too.
+		if (AfterburnLeft <= 0.f || Distance <= Ship.GetPreferredRange())
+		{
+			StopAfterburn(true);
+		}
+		return;
+	}
+
+	if (Behaviour.AfterburnMultiplier > 1.f && AfterburnCooldownLeft <= 0.f && LaserRange > 0.f
+		&& Distance > LaserRange * Behaviour.AfterburnTriggerFactor)
+	{
+		StartAfterburn(Ship, Behaviour);
+	}
+}
+
+void UEnemyBrainComponent::StartAfterburn(AStartechEnemyShip& Ship, const FEnemyBehaviourBalance& Behaviour)
+{
+	bAfterburning = true;
+	AfterburnLeft = Behaviour.AfterburnSeconds;
+	// The boost scale of the shared flight model: forward top speed and acceleration.
+	Ship.SetFlightScales(1.f, Behaviour.AfterburnMultiplier);
+}
+
+void UEnemyBrainComponent::StopAfterburn(const bool bStartCooldown)
+{
+	if (!bAfterburning)
+	{
+		return;
+	}
+
+	bAfterburning = false;
+	AfterburnLeft = 0.f;
+	if (bStartCooldown)
+	{
+		if (const AStartechEnemyShip* const Ship = GetShip())
+		{
+			AfterburnCooldownLeft = Ship->GetBehaviour().AfterburnCooldown;
+		}
+	}
+	if (AStartechEnemyShip* const Ship = GetShip())
+	{
+		Ship->SetFlightScales(1.f, 1.f);
+	}
+}
+
+bool UEnemyBrainComponent::UpdateRetreat(AStartechEnemyShip& Ship, const UEnemyData& Data,
+	const FEnemyBehaviourBalance& Behaviour, const FVector& PlayerLocation, const float Distance, const float DeltaSeconds)
+{
+	if (Behaviour.RetreatFraction <= 0.f)
+	{
+		bRetreating = false;
+		return false;
+	}
+
+	const float PreferredRange = Ship.GetPreferredRange();
+	if (!bRetreating && Distance < PreferredRange * Behaviour.RetreatFraction)
+	{
+		bRetreating = true;
+		CancelCharge();
+	}
+	else if (bRetreating && Distance >= PreferredRange)
+	{
+		bRetreating = false;
+	}
+
+	if (!bRetreating)
+	{
+		return false;
+	}
+
+	// Nose away from the player and full throttle once it has turned; nothing to shoot at that way.
+	HoldFire(Ship, DeltaSeconds);
+	const FVector ShipLocation = Ship.GetActorLocation();
+	const FVector Away = FVector(ShipLocation.X - PlayerLocation.X, ShipLocation.Y - PlayerLocation.Y, 0.f).GetSafeNormal();
+	const FVector Escape = ShipLocation + (Away.IsNearlyZero() ? Ship.GetActorForwardVector() : Away) * PreferredRange;
+	Ship.SetFacingLocation(Escape, Data.TurnRate);
+	Ship.SetTurnInput(0.f);
+	Ship.SetStrafeInput(0.f);
+	const FVector LevelForward = FRotator(0.f, Ship.GetActorRotation().Yaw, 0.f).Vector();
+	Ship.SetThrottleInput(FMath::Max(FVector::DotProduct(LevelForward, Away), 0.f));
+	Ship.SetVerticalInput(0.f);
+	return true;
+}
+
+bool UEnemyBrainComponent::UpdateCharge(AStartechEnemyShip& Ship, const FEnemyBehaviourBalance& Behaviour,
+	const APawn& Player, const bool bInRange, const float DeltaSeconds)
+{
+	UEnemyChargeComponent* const Charge = Ship.GetChargedShot();
+	if (!Behaviour.bChargedShot || !Charge)
+	{
+		return false;
+	}
+	if (Charge->IsCharging())
+	{
+		return true;
+	}
+
+	ChargeWaitLeft -= DeltaSeconds;
+	if (ChargeWaitLeft > 0.f || !bInRange || !HasLineOfSight(Ship, Player))
+	{
+		return false;
+	}
+
+	if (!Charge->BeginCharge(Player))
+	{
+		return false;
+	}
+	// From one charge's start to the next.
+	ChargeWaitLeft = FMath::FRandRange(Behaviour.ChargeIntervalMin, FMath::Max(Behaviour.ChargeIntervalMin, Behaviour.ChargeIntervalMax));
+	return Charge->IsCharging();
+}
+
+bool UEnemyBrainComponent::HasLineOfSight(const AStartechEnemyShip& Ship, const APawn& Player) const
+{
+	const UWorld* const World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(EnemyLineOfSight), false, &Ship);
+	FHitResult Hit;
+	const bool bBlocked = World->LineTraceSingleByChannel(Hit, Ship.GetActorLocation(), Player.GetActorLocation(),
+		ECC_Visibility, Params);
+	return !bBlocked || Hit.GetActor() == &Player;
+}
+
+void UEnemyBrainComponent::CancelCharge() const
+{
+	if (const AStartechEnemyShip* const Ship = GetShip())
+	{
+		if (UEnemyChargeComponent* const Charge = Ship->GetChargedShot())
+		{
+			Charge->CancelCharge();
+		}
+	}
+}
+
+void UEnemyBrainComponent::UpdateStrafe(AStartechEnemyShip& Ship, const float DeltaSeconds)
+{
+	StrafeSwapTimeLeft -= DeltaSeconds;
+	if (StrafeSwapTimeLeft <= 0.f)
+	{
+		StrafeDirection = -StrafeDirection;
+		StrafeSwapTimeLeft = PickStrafeSwapTime();
+	}
+	Ship.SetStrafeInput(StrafeDirection);
+}
+
+FVector UEnemyBrainComponent::GetFlankPoint(const AStartechEnemyShip& Ship, const FVector& PlayerLocation) const
+{
+	const FVector FromPlayer = Ship.GetActorLocation() - PlayerLocation;
+	const FVector Flat = FVector(FromPlayer.X, FromPlayer.Y, 0.f).GetSafeNormal();
+	const FVector Side = FVector::CrossProduct(FVector::UpVector, Flat) * StrafeDirection;
+
+	// Straight at the player from afar (an angled approach would never catch one flying away), turning out to the
+	// full flank offset as it reaches its laser range.
+	const ULaserWeaponData* const Laser = Ship.GetLaserWeapon();
+	const float Range = Laser ? Laser->Range : 0.f;
+	const float Blend = Range > 0.f ? FMath::Clamp((FlankBlendStart * Range - FromPlayer.Size()) / ((FlankBlendStart - 1.f) * Range), 0.f, 1.f) : 1.f;
+	return PlayerLocation + Side * Ship.GetPreferredRange() * Blend;
 }
 
 void UEnemyBrainComponent::TickReturnHome(AStartechEnemyShip& Ship, const UEnemyData& Data, const float DeltaSeconds)
@@ -186,11 +473,25 @@ void UEnemyBrainComponent::TickReturnHome(AStartechEnemyShip& Ship, const UEnemy
 	}
 }
 
+void UEnemyBrainComponent::GiveUp(AStartechEnemyShip& Ship, const TCHAR* const Reason, const float DeltaSeconds)
+{
+	HoldFire(Ship, DeltaSeconds);
+	LastGiveUpReason = Reason;
+	SetState(EBrainState::ReturnHome);
+}
+
 void UEnemyBrainComponent::SetState(const EBrainState NewState)
 {
 	if (State == NewState)
 	{
 		return;
+	}
+
+	if (State == EBrainState::Engage)
+	{
+		StopAfterburn(true);
+		CancelCharge();
+		bRetreating = false;
 	}
 
 	State = NewState;
@@ -200,6 +501,15 @@ void UEnemyBrainComponent::SetState(const EBrainState NewState)
 	{
 		StrafeDirection = FMath::RandBool() ? 1.f : -1.f;
 		StrafeSwapTimeLeft = PickStrafeSwapTime();
+		QuietTime = 0.f;
+		FarTime = 0.f;
+		LastGiveUpReason = TEXT("");
+		if (const AStartechEnemyShip* const Ship = GetShip())
+		{
+			const FEnemyBehaviourBalance& Behaviour = Ship->GetBehaviour();
+			ChargeWaitLeft = FMath::FRandRange(Behaviour.ChargeFirstDelayMin,
+				FMath::Max(Behaviour.ChargeFirstDelayMin, Behaviour.ChargeFirstDelayMax));
+		}
 	}
 }
 
@@ -303,5 +613,21 @@ void UEnemyBrainComponent::HandleOwnerDamaged(AActor* const DamagedActor, const 
 	if (bByPlayer)
 	{
 		SetState(EBrainState::Engage);
+		QuietTime = 0.f;
+	}
+}
+
+void UEnemyBrainComponent::HandleAnyDamage(const UHealthComponent& Health, float, float, AActor* const Instigator,
+	bool, bool)
+{
+	if (bStopped || State != EBrainState::Engage || Instigator != GetOwner())
+	{
+		return;
+	}
+
+	const AStartechEnemyShip* const Ship = GetShip();
+	if (Ship && Ship->GetBehaviour().bQuietCountsDealtDamage && Health.GetOwner() == GetLivingPlayer())
+	{
+		QuietTime = 0.f;
 	}
 }

@@ -60,6 +60,9 @@ public:
 	/** Holds or releases the trigger, as the fire key does (test pilots). Ignored while the hub is open. */
 	void SetFireHeld(const bool bHeld) { bWantsToFire = bHeld && !IsHubOpen(); }
 
+	/** Sets the A/D axis, as the keys do (test pilots): turns in free flight, strafes in the combat stance. */
+	void SetSteerAxis(const float Axis) { RawTurnAxis = IsHubOpen() ? 0.f : FMath::Clamp(Axis, -1.f, 1.f); }
+
 	// Whatever was actually taken from a pickup, for sound and UI.
 	UPROPERTY(BlueprintAssignable, Category = "Loot")
 	FOnLootCollected OnLootCollected;

@@ -24,6 +24,9 @@ class UWarpTransitionComponent;
  * - Death: while the screen is black, a centred "Ship destroyed. Returning to <home>." ("Ship destroyed." when dying
  *   at home) and, if cargo was dropped, "Your cargo remains in <sector> for m:ss" counting down. It fades with the
  *   camera fade, and this element stays up while the rest of the HUD is folded for the death.
+ * - Charged shot: while an enemy charges a shot at the player, a pulsing Danger bracket on it when it is on screen
+ *   (the current target included; the reticle also tints its own brackets), or a pulsing Danger edge towards it when it
+ *   is off screen. The pulse follows the charge's own (UEnemyChargeComponent::GetPulse).
  * Edge effects use M_HUD_EdgeFeedback (one dynamic instance each); without it they fall back to plain edge bars.
  */
 UCLASS()
@@ -88,6 +91,12 @@ private:
 	void DrawEdge(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, UMaterialInstanceDynamic* Instance,
 		const FSlateBrush& Brush, const FLinearColor& Color, float Intensity, const FVector2f& Direction) const;
 
+	/** The charged-shot warnings: brackets on charging enemies on screen, the edge towards one off screen. */
+	void DrawChargeWarnings(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry) const;
+
+	/** Actor's projected bounds in widget space; false when it isn't fully in front of the camera and on screen. */
+	bool GetActorFrame(const AActor& Actor, const FGeometry& Geometry, FVector2f& OutMin, FVector2f& OutMax) const;
+
 	/** Out-of-bounds pulse rate now, in Hz: the style's rate, rising to the urgent rate near the end of the countdown. */
 	float GetOutOfBoundsPulseRate() const;
 
@@ -126,6 +135,13 @@ private:
 	/** Edge instance for the out-of-bounds tint. */
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> BoundsEdge;
+
+	/** Edge instance for the charged-shot warning. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> ChargeEdge;
+
+	/** Brush drawing ChargeEdge. */
+	FSlateBrush ChargeBrush;
 
 	/** Brush drawing ShieldEdge. */
 	FSlateBrush ShieldBrush;

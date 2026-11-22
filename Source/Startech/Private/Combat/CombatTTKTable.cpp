@@ -233,6 +233,8 @@ FCombatTTKTable FCombatTTKTable::Build(const UCombatBalance& Balance)
 
 			const double EffectiveHealth = Enemy.Hull * TierData->EnemyHullMultiplier + Enemy.Shield * TierData->EnemyShieldMultiplier;
 			const double EnemyDps = Enemy.DamagePerShot * TierData->EnemyDamageMultiplier * Enemy.LaserWeapon->FireRate * EnemyMounts;
+			const FEnemyBehaviourBalance& Behaviour = Enemy.Behaviour;
+			const double ChargedDamage = Behaviour.bChargedShot ? Behaviour.ChargedShotDamage * TierData->EnemyDamageMultiplier : 0.0;
 
 			FLootRollModifiers Modifiers = FLootRollModifiers::FromTier(*TierData, ELootRollSource::EnemyDrop);
 			Modifiers.CreditsMultiplier *= Enemy.RewardMultiplier;
@@ -267,8 +269,33 @@ FCombatTTKTable FCombatTTKTable::Build(const UCombatBalance& Balance)
 				Row.Role = Appearance.Role;
 				Row.Gear = FString::Printf(TEXT("%s L%d"), *AmmoName(Ammo), Case.LasersLevel);
 				Row.TimeToKill = static_cast<float>(EffectiveHealth / PlayerDps);
-				Row.LoseOne = static_cast<float>(EnemyDps * Row.TimeToKill / PlayerHealth);
+				// Charged shots on the type's schedule (average delays): each one that lands before the kill hits (or is
+				// dodged). FireUptime is measured over whole fights, so it already counts the telegraphs' pauses.
+				int32 Charges = 0;
+				if (Behaviour.bChargedShot)
+				{
+					const double First = 0.5 * (Behaviour.ChargeFirstDelayMin + Behaviour.ChargeFirstDelayMax);
+					const double Interval = FMath::Max(0.5 * (Behaviour.ChargeIntervalMin + Behaviour.ChargeIntervalMax), 0.1);
+					const double Flight = Enemy.PreferredRange / FMath::Max(Behaviour.ChargedShotSpeed, 1.f);
+					for (double Start = First; Start + Behaviour.ChargeTelegraphSeconds + Flight <= Row.TimeToKill; Start += Interval)
+					{
+						++Charges;
+					}
+				}
+				Row.ChargedShots = Charges;
+				const double LaserLoss = EnemyDps * Enemy.FireUptime * Row.TimeToKill;
+				Row.LoseOne = static_cast<float>((LaserLoss + Charges * ChargedDamage) / PlayerHealth);
 				Row.LoseThree = Row.LoseOne * ThreeAtOnceFactor;
+				if (Behaviour.bChargedShot)
+				{
+					Row.LoseAlt = static_cast<float>(LaserLoss / PlayerHealth);
+					Row.AltCase = TEXT("dodged");
+				}
+				else if (Behaviour.AfterburnMultiplier > 1.f)
+				{
+					Row.LoseAlt = static_cast<float>(EnemyDps * Enemy.FireUptimeAlt * Row.TimeToKill / PlayerHealth);
+					Row.AltCase = TEXT("back off");
+				}
 				Row.Rounds = FMath::CeilToInt32(EffectiveHealth / ShotDamage - 1e-6);
 
 				// Free ammo costs nothing; drop-only ammo was found, not bought.
@@ -290,6 +317,23 @@ FCombatTTKTable FCombatTTKTable::Build(const UCombatBalance& Balance)
 					Row.AllowedMaxTimeToKill = Case.MaxTimeToKill * Balance.ToughFactor + Tolerance;
 					Row.AllowedMaxLoss = Case.bCheckDamage ? Balance.OneFightLossMax * Balance.ToughFactor : 0.f;
 				}
+
+				// The type's own loss targets, where it has them.
+				const bool bOwnTargets = Case.bCheckDamage && Enemy.LossTargetMax > 0.f && Row.Role != ECombatRole::Weak
+					&& (!Enemy.bLossTargetsRegularOnly || Row.Role == ECombatRole::Regular);
+				if (bOwnTargets)
+				{
+					Row.AllowedMinLoss = Enemy.LossTargetMin;
+					Row.AllowedMaxLoss = Enemy.LossTargetMax;
+				}
+				if (bOwnTargets && Row.LoseAlt >= 0.f && Enemy.LossAltTargetMax > 0.f)
+				{
+					Row.AllowedMinAltLoss = Enemy.LossAltTargetMin;
+					Row.AllowedMaxAltLoss = Enemy.LossAltTargetMax;
+				}
+				Row.bAltTargetInfoOnly = Enemy.bLossAltTargetInfoOnly;
+				Row.bAltLossOutside = Row.AllowedMaxAltLoss > 0.f && !Row.bAltTargetInfoOnly
+					&& (Row.LoseAlt < Row.AllowedMinAltLoss - LossEpsilon || Row.LoseAlt > Row.AllowedMaxAltLoss + LossEpsilon);
 
 				Row.bTimeToKillOutside = Row.AllowedMaxTimeToKill > 0.f
 					&& (Row.TimeToKill < Row.AllowedMinTimeToKill - TimeEpsilon || Row.TimeToKill > Row.AllowedMaxTimeToKill + TimeEpsilon);
@@ -315,7 +359,7 @@ TArray<FString> FCombatTTKTable::ToLines() const
 	static const TCHAR* const RoleNames[] = { TEXT("regular"), TEXT("tough"), TEXT("weak") };
 
 	TArray<FString> Lines;
-	Lines.Add(TEXT("Tier Enemy    Role     Gear      TTK      Lose1    Lose3  Rounds  Ammo cr  Kill cr  Cost%    Targets"));
+	Lines.Add(TEXT("Tier Enemy    Role     Gear      TTK      Lose1    Alt case          Lose3  Charged  Rounds  Ammo cr  Kill cr  Cost%    Targets"));
 	for (const FCombatTTKRow& Row : Rows)
 	{
 		FString Targets;
@@ -327,11 +371,19 @@ TArray<FString> FCombatTTKTable::ToLines() const
 		{
 			Targets += FString::Printf(TEXT(", loss %.0f-%.0f%%"), Row.AllowedMinLoss * 100.f, Row.AllowedMaxLoss * 100.f);
 		}
-		Lines.Add(FString::Printf(TEXT("%-4d %-9s %-8s %-9s %-8s %-8s %5.0f%%  %6d  %7.1f  %7.1f  %-7s  %s"),
+		if (Row.AllowedMaxAltLoss > 0.f)
+		{
+			Targets += FString::Printf(TEXT(", %s %.0f-%.0f%%%s"), *Row.AltCase, Row.AllowedMinAltLoss * 100.f,
+				Row.AllowedMaxAltLoss * 100.f, Row.bAltTargetInfoOnly ? TEXT(" (info)") : TEXT(""));
+		}
+		const FString Alt = Row.LoseAlt >= 0.f
+			? Mark(FString::Printf(TEXT("%.1f%% %s"), Row.LoseAlt * 100.f, *Row.AltCase), Row.bAltLossOutside)
+			: FString(TEXT("-"));
+		Lines.Add(FString::Printf(TEXT("%-4d %-9s %-8s %-9s %-8s %-8s %-17s %5.0f%%  %7d  %6d  %7.1f  %7.1f  %-7s  %s"),
 			Row.Tier, *Row.Enemy, RoleNames[static_cast<int32>(Row.Role)], *Row.Gear,
 			*Mark(FString::Printf(TEXT("%.2fs"), Row.TimeToKill), Row.bTimeToKillOutside),
-			*Mark(FString::Printf(TEXT("%.1f%%"), Row.LoseOne * 100.f), Row.bLossOutside),
-			Row.LoseThree * 100.f, Row.Rounds, Row.AmmoCost, Row.KillValue,
+			*Mark(FString::Printf(TEXT("%.1f%%"), Row.LoseOne * 100.f), Row.bLossOutside), *Alt,
+			Row.LoseThree * 100.f, Row.ChargedShots, Row.Rounds, Row.AmmoCost, Row.KillValue,
 			*Mark(FString::Printf(TEXT("%.1f%%"), Row.CostShare * 100.0), Row.bCostOutside),
 			Targets.IsEmpty() ? TEXT("-") : *Targets));
 	}

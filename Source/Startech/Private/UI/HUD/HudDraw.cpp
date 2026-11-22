@@ -231,9 +231,11 @@ bool FHudDraw::ProjectToWidget(const UWidget& Widget, const APlayerController& P
 		return false;
 	}
 
-	// Viewport pixels to this widget's local space, which accounts for DPI scale and where the widget sits.
+	// Viewport pixels to this widget's local space, which accounts for DPI scale and where the widget sits. Paint
+	// geometry is relative to the window, so the window's position on the desktop comes off too: without it, everything
+	// projected lands off screen in a game window that isn't at the desktop's corner (a maximized editor hid this).
 	FVector2D Local;
-	USlateBlueprintLibrary::ScreenToWidgetLocal(&Widget, Geometry, ViewportPixel, Local);
+	USlateBlueprintLibrary::ScreenToWidgetLocal(&Widget, Geometry, ViewportPixel, Local, true);
 	OutPosition = FVector2f(Local);
 	return true;
 }

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Death/HullFlash.h"
 #include "Death/ShipDeathTypes.h"
 #include "Engine/EngineTypes.h"
 #include "Population/Poolable.h"
@@ -53,10 +54,10 @@ public:
 	/** Seconds since BeginDying (0 when alive). */
 	float GetElapsed() const { return Elapsed; }
 
-	/** The current tumble, in degrees per second about GetTumbleAxis (0 when alive). */
+	/** The current tumble in degrees per second (0 unless dying). */
 	float GetTumbleRate() const;
 
-	/** The current flash, 0 to 1. */
+	/** The current flash, 0 to 1 (0 unless dying). */
 	float GetFlash() const { return Flash; }
 
 	/** The effects this death uses (resolved in BeginDying). */
@@ -90,15 +91,6 @@ private:
 		TWeakObjectPtr<UPrimitiveComponent> Primitive;
 		FCollisionResponseContainer Responses;
 		bool bGenerateOverlapEvents = false;
-	};
-
-	/** One flashing material slot and its starting values. */
-	struct FFlashSlot
-	{
-		TWeakObjectPtr<UMaterialInstanceDynamic> Material;
-		TArray<TPair<FName, FLinearColor>> Colors;
-		float Emission = 0.f;
-		bool bHasEmission = false;
 	};
 
 	/** Pawns and shots pass through every colliding primitive of the owner, and nothing overlaps it. */
@@ -139,16 +131,8 @@ private:
 	FShipDeathEffects Effects;
 
 	TArray<FSavedCollision> SavedCollision;
-	TArray<FFlashSlot> FlashSlots;
 
-	/** The mesh's override materials before StartFlash, put back by RestoreMaterials. */
+	/** The white flash on the hull's materials. */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UMaterialInterface>> SavedOverrides;
-
-	/** The dynamic materials, kept alive while the flash runs. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<UMaterialInstanceDynamic>> FlashMaterials;
-
-	TWeakObjectPtr<UMeshComponent> FlashMesh;
-	bool bMaterialsChanged = false;
+	FHullFlash HullFlash;
 };

@@ -49,6 +49,9 @@ public:
 
 	float GetMaxForwardSpeed() const { return MaxForwardSpeed; }
 
+	/** Acceleration (and the deceleration under reverse throttle), cm/s², before the flight scales. */
+	float GetAcceleration() const { return Acceleration; }
+
 	/** The forward top speed without boost: MaxForwardSpeed × the normal speed scale (Engines upgrade). */
 	float GetNormalMaxForwardSpeed() const { return MaxForwardSpeed * NormalSpeedScale; }
 

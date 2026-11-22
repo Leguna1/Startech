@@ -1,5 +1,7 @@
 # Task: death sequence (a moment for the explosion before loot)
 
+**Status: done (2026-11-22).** Report: `Reports/TASK_DeathSequence_Phase1.md`. After review, the death effects are also preloaded when a sector becomes ready (`UShipDeathPreloadSubsystem`), so the first death doesn't stutter.
+
 Read Startech's root `CLAUDE.md` first. The combat balance task is done, including the combat log. Reuse the pooling, health, loot, quest event and respawn code that exists. Don't change the plugins, except where enemy pooling needs a reset hook (say so first).
 
 ## The problem

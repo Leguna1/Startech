@@ -59,6 +59,122 @@ struct STARTECH_API FEnemyTierRole
 };
 
 /**
+ * How one enemy type behaves (UEnemyBrainComponent): its speed, when it gives up, and whether it circles and
+ * afterburns. A 0 switches a feature off or, where noted, falls back to the type's UEnemyData.
+ */
+USTRUCT(BlueprintType)
+struct STARTECH_API FEnemyBehaviourBalance
+{
+	GENERATED_BODY()
+
+	/** Forward top speed, cm/s. 0 uses UEnemyData::MaxForwardSpeed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "cm/s"))
+	float ForwardSpeed = 0.f;
+
+	/**
+	 * Forward top speed per tier (entry 0 = tier I), cm/s, for types whose speed must keep up with the player's Engines
+	 * upgrade. A missing or 0 entry uses ForwardSpeed.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour")
+	TArray<float> ForwardSpeedByTier;
+
+	/** This type's forward speed in Tier: ForwardSpeedByTier's entry, else ForwardSpeed (0: UEnemyData's). */
+	float GetForwardSpeed(const int32 Tier) const
+	{
+		const int32 Index = Tier - 1;
+		return ForwardSpeedByTier.IsValidIndex(Index) && ForwardSpeedByTier[Index] > 0.f ? ForwardSpeedByTier[Index] : ForwardSpeed;
+	}
+
+	/** Gives up once the player is this far from the enemy's home (its spawn point), cm. 0 uses UEnemyData::LeashRange. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "cm"))
+	float HomeLeashRange = 0.f;
+
+	/** Gives up after this long engaged without taking damage from the player (and, with bQuietCountsDealtDamage, without dealing any). 0 never. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "s"))
+	float LeashQuietSeconds = 0.f;
+
+	/** Damage the enemy deals to the player also resets LeashQuietSeconds. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour")
+	bool bQuietCountsDealtDamage = false;
+
+	/** Gives up after LeashFarSeconds with the player farther than this × its laser range. 0 never. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0"))
+	float LeashFarRangeFactor = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "s"))
+	float LeashFarSeconds = 8.f;
+
+	/**
+	 * Circles the player: inside its laser range it strafes (swapping direction every few seconds) while holding its
+	 * preferred range, and beyond it it approaches a point beside the player rather than the player itself.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour")
+	bool bCircle = false;
+
+	/** Forward speed × this while afterburning. 1 or less: no afterburner. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0"))
+	float AfterburnMultiplier = 0.f;
+
+	/** Longest burn; it also ends once the player is in laser range. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "s"))
+	float AfterburnSeconds = 3.f;
+
+	/** Seconds after a burn before the next can start. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", Units = "s"))
+	float AfterburnCooldown = 6.f;
+
+	/** A burn starts when the player is farther than this × its laser range. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "1"))
+	float AfterburnTriggerFactor = 1.2f;
+
+	/**
+	 * With the player inside this × its preferred range, it turns and flies away without firing (or charging) until it
+	 * is back at its preferred range. Between this and the preferred range it reverses while firing, as every type
+	 * does. 0 never retreats.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Behaviour", meta = (ClampMin = "0", ClampMax = "1"))
+	float RetreatFraction = 0.f;
+
+	/** Fires charged shots (UEnemyChargeComponent): a telegraph, then a slow projectile that can be dodged. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot")
+	bool bChargedShot = false;
+
+	/** Seconds after engaging before the first charge, picked between these. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "s"))
+	float ChargeFirstDelayMin = 2.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "s"))
+	float ChargeFirstDelayMax = 3.f;
+
+	/** Seconds from one charge's start to the next, picked between these. It waits while it has no line of sight. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "s"))
+	float ChargeIntervalMin = 6.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "s"))
+	float ChargeIntervalMax = 8.f;
+
+	/** The telegraph: glow, charge effect and HUD warning, then the shot. Normal fire pauses meanwhile. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "s"))
+	float ChargeTelegraphSeconds = 1.2f;
+
+	/** Damage of one charged shot, before the tier's EnemyDamageMultiplier. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0"))
+	float ChargedShotDamage = 40.f;
+
+	/** Projectile speed. At the preferred range it should take about 0.6–0.8 s to arrive. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "1", Units = "cm/s"))
+	float ChargedShotSpeed = 12500.f;
+
+	/** Radius of the projectile's sweep. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0", Units = "cm"))
+	float ChargedShotRadius = 150.f;
+
+	/** Seconds the projectile flies before it is gone. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Charged shot", meta = (ClampMin = "0.1", Units = "s"))
+	float ChargedShotLifetime = 2.f;
+};
+
+/**
  * One enemy type's combat numbers, before the tier multipliers (UStartechSettings::TierData). Replaces UEnemyData's
  * MaxHull, MaxShield, LaserWeapon and PreferredRange and the weapon's damage; applied by AStartechEnemyShip::ApplyStats.
  */
@@ -99,6 +215,49 @@ struct STARTECH_API FEnemyBalance
 	/** The tiers it appears in and its role there (the TTK table's rows). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy")
 	TArray<FEnemyTierRole> Appearances;
+
+	/** How it behaves: speed, leash, circling, afterburner. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy")
+	FEnemyBehaviourBalance Behaviour;
+
+	/**
+	 * TTK table only: the share of a fight it spends firing its lasers (turning, closing in, retreating and charging
+	 * don't fire), measured from play sessions (Startech.Combat.Report's Uptime column). 1 = the old worst case.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float FireUptime = 1.f;
+
+	/**
+	 * TTK table only: the same in the type's second case: against a player who backs off (afterburner types). Charged-shot
+	 * types use FireUptime for both of theirs (every charged shot hit, and every one dodged).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float FireUptimeAlt = 1.f;
+
+	/** TTK table: this type's own one-fight health-loss target (0 max: the role's target from OneFightLossMin/Max). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float LossTargetMin = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float LossTargetMax = 0.f;
+
+	/** TTK table: the target of the second case (all charged shots dodged, or the player backing off). 0 max: none. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float LossAltTargetMin = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table", meta = (ClampMin = "0", ClampMax = "1"))
+	float LossAltTargetMax = 0.f;
+
+	/**
+	 * The second case's target is shown for information only: never marked outside and never failing
+	 * Startech.Combat.TTKTargets (the chaser's back-off value, which varies 3-5 points between play sessions).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table")
+	bool bLossAltTargetInfoOnly = false;
+
+	/** Only the Regular role's rows (the tiers where the type is the norm) are held to the type's own loss targets. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TTK table")
+	bool bLossTargetsRegularOnly = false;
 };
 
 /** The gear a player should have when fighting in a tier, and the time to kill a regular enemy with it. */

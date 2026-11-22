@@ -56,6 +56,9 @@ private:
 	UFUNCTION()
 	void HandleTargetHullChanged(float Current, float Max);
 
+	/** The pulse (0 to 1) of the current target's charged-shot telegraph, or -1 when it isn't charging. */
+	float GetTargetChargePulse() const;
+
 	/** Follows NewTarget's health component, dropping the previous one. */
 	void BindTargetHealth(const UTargetableComponent* NewTarget);
 

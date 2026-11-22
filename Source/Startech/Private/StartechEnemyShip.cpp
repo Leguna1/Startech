@@ -1,6 +1,7 @@
 #include "StartechEnemyShip.h"
 
 #include "Combat/CombatBalance.h"
+#include "Combat/EnemyChargeComponent.h"
 #include "Death/ShipDeathComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DespawnSubsystem.h"
@@ -28,6 +29,8 @@ AStartechEnemyShip::AStartechEnemyShip()
 	Targetable->SetupAttachment(ShipMesh);
 
 	Brain = CreateDefaultSubobject<UEnemyBrainComponent>(TEXT("Brain"));
+
+	ChargedShot = CreateDefaultSubobject<UEnemyChargeComponent>(TEXT("ChargedShot"));
 
 	MapMarker = CreateDefaultSubobject<UMapMarkerComponent>(TEXT("MapMarker"));
 	MapMarker->SetupAttachment(ShipMesh);
@@ -76,7 +79,8 @@ void AStartechEnemyShip::OnReleasedToPool_Implementation()
 
 void AStartechEnemyShip::ResetForNewLife()
 {
-	// Before the mesh and stats: puts back the collision and materials the last death changed.
+	// Before the mesh and stats: no charge glow left over, and the collision and materials the last death changed back.
+	ChargedShot->CancelCharge();
 	ShipDeath->ResetDeath();
 
 	ApplyMesh();
@@ -86,6 +90,8 @@ void AStartechEnemyShip::ResetForNewLife()
 	HealthComponent->Revive();
 
 	ResetFlightState();
+	// No afterburner left over from the last life.
+	SetFlightScales(1.f, 1.f);
 	StopWeapons();
 
 	// The base HandleDeath switched both off.
@@ -160,6 +166,14 @@ void AStartechEnemyShip::ApplyStats()
 	LifeLaserWeapon = Stats && Stats->LaserWeapon ? Stats->LaserWeapon.Get() : EnemyData->LaserWeapon.Get();
 	LifePreferredRange = Stats ? Stats->PreferredRange : EnemyData->PreferredRange;
 	LifeRewardMultiplier = Stats ? Stats->RewardMultiplier : 1.f;
+	LifeBehaviour = Stats ? Stats->Behaviour : FEnemyBehaviourBalance();
+	LifeDamageMultiplier = Tier.EnemyDamageMultiplier;
+	LifeHomeLeashRange = LifeBehaviour.HomeLeashRange > 0.f ? LifeBehaviour.HomeLeashRange : EnemyData->LeashRange;
+	// Some types keep pace with the player's Engines upgrade tier by tier.
+	if (const float Speed = LifeBehaviour.GetForwardSpeed(LifeTier); Speed > 0.f)
+	{
+		MaxForwardSpeed = Speed;
+	}
 
 	ULaserWeaponData* const Laser = LifeLaserWeapon;
 	LaserMountLeft->SetWeapon(Laser);
@@ -235,6 +249,8 @@ void AStartechEnemyShip::HandleDeath(AActor* const Killer)
 	// Switches off the targetable, which releases the player's lock.
 	Super::HandleDeath(Killer);
 
+	// A telegraph in progress never fires; a shot already flying keeps flying.
+	ChargedShot->CancelCharge();
 	Brain->StopBrain();
 
 	ClearFacingLocation();

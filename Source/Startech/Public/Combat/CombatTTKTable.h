@@ -4,8 +4,10 @@
 #include "Combat/CombatBalance.h"
 
 /**
- * One enemy type in one tier, fought with one expected-gear case of DA_CombatBalance. Both sides hit every shot and the
- * enemy fires for the whole fight (the worst case); shield regeneration never starts under sustained fire.
+ * One enemy type in one tier, fought with one expected-gear case of DA_CombatBalance. Both sides hit every shot; the
+ * enemy's lasers fire for its FireUptime share of the fight (measured, pauses for charging included), and its charged
+ * shots (if any) come on its schedule;
+ * shield regeneration never starts under sustained fire.
  */
 struct STARTECH_API FCombatTTKRow
 {
@@ -26,6 +28,16 @@ struct STARTECH_API FCombatTTKRow
 	float LoseOne = 0.f;
 	float LoseThree = 0.f;
 
+	/**
+	 * The second case's one-fight loss, or negative for none: every charged shot dodged (charged-shot types), or the
+	 * player backing off (afterburner types). AltCase names it.
+	 */
+	float LoseAlt = -1.f;
+	FString AltCase;
+
+	/** Charged shots in one fight (on the type's schedule), included in LoseOne. */
+	int32 ChargedShots = 0;
+
 	/** Rounds fired (all mounts) and their cost at the ammo shop; free and drop-only ammo cost nothing. */
 	int32 Rounds = 0;
 	double AmmoCost = 0.0;
@@ -44,11 +56,19 @@ struct STARTECH_API FCombatTTKRow
 	float AllowedMinLoss = 0.f;
 	float AllowedMaxLoss = 0.f;
 
+	/** The second case's allowed loss (0 max: no target). */
+	float AllowedMinAltLoss = 0.f;
+	float AllowedMaxAltLoss = 0.f;
+
+	/** The second case's target is information only: shown, never marked outside (FEnemyBalance::bLossAltTargetInfoOnly). */
+	bool bAltTargetInfoOnly = false;
+
 	bool bTimeToKillOutside = false;
 	bool bLossOutside = false;
+	bool bAltLossOutside = false;
 	bool bCostOutside = false;
 
-	bool IsOutside() const { return bTimeToKillOutside || bLossOutside || bCostOutside; }
+	bool IsOutside() const { return bTimeToKillOutside || bLossOutside || bAltLossOutside || bCostOutside; }
 };
 
 /**

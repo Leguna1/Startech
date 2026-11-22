@@ -75,7 +75,8 @@ void UCombatBalance::RollTierAmmoDrops(const int32 Tier, FLootBundle& Bundle) co
 	const UStartechSettings& Settings = UStartechSettings::Get();
 	for (const FTierAmmoDrop& Drop : TierAmmoDrops)
 	{
-		if (Drop.Tier != Tier || Drop.Chance <= 0.f || FMath::FRand() >= Drop.Chance)
+		// FRand can return exactly 1, so a chance of 1 is checked apart: it always succeeds.
+		if (Drop.Tier != Tier || Drop.Chance <= 0.f || (Drop.Chance < 1.f && FMath::FRand() >= Drop.Chance))
 		{
 			continue;
 		}

@@ -1,5 +1,8 @@
 #include "Combat/CombatTelemetrySubsystem.h"
 
+#include "Combat/ChargedShotProjectile.h"
+#include "Combat/ChargedShotSubsystem.h"
+
 #include "AmmoData.h"
 #include "Combat/CombatBalance.h"
 #include "Engine/World.h"
@@ -104,6 +107,8 @@ void UCombatTelemetrySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	ShotHandle = ULaserMountComponent::OnAnyShotFired.AddUObject(this, &UCombatTelemetrySubsystem::HandleShot);
 	DamageHandle = UHealthComponent::OnAnyDamageApplied.AddUObject(this, &UCombatTelemetrySubsystem::HandleDamage);
 	DeathHandle = AStartechEnemyShip::OnAnyEnemyDied.AddUObject(this, &UCombatTelemetrySubsystem::HandleEnemyDied);
+	ChargedFiredHandle = UChargedShotSubsystem::OnAnyChargedShotFired.AddUObject(this, &UCombatTelemetrySubsystem::HandleChargedShotFired);
+	ChargedEndedHandle = UChargedShotSubsystem::OnAnyChargedShotEnded.AddUObject(this, &UCombatTelemetrySubsystem::HandleChargedShotEnded);
 }
 
 void UCombatTelemetrySubsystem::Deinitialize()
@@ -111,6 +116,8 @@ void UCombatTelemetrySubsystem::Deinitialize()
 	ULaserMountComponent::OnAnyShotFired.Remove(ShotHandle);
 	UHealthComponent::OnAnyDamageApplied.Remove(DamageHandle);
 	AStartechEnemyShip::OnAnyEnemyDied.Remove(DeathHandle);
+	UChargedShotSubsystem::OnAnyChargedShotFired.Remove(ChargedFiredHandle);
+	UChargedShotSubsystem::OnAnyChargedShotEnded.Remove(ChargedEndedHandle);
 
 	// The session is over: whatever is still running is written as disengaged.
 	while (!Open.IsEmpty())
@@ -258,6 +265,36 @@ void UCombatTelemetrySubsystem::HandleShot(const ULaserMountComponent& Mount, AA
 	Use->Cost += Balance ? Balance->GetRoundCost(Ammo) : 0.0;
 }
 
+void UCombatTelemetrySubsystem::HandleChargedShotFired(const AChargedShotProjectile& Projectile)
+{
+	const AStartechEnemyShip* const Enemy = Cast<AStartechEnemyShip>(Projectile.GetLaunch().Shooter.Get());
+	if (Projectile.GetWorld() != GetWorld() || !Enemy)
+	{
+		return;
+	}
+	// Like a laser shot: counted only inside an engagement, which a shot alone doesn't start.
+	if (FCombatEngagement* const Engagement = FindEngagement(*Enemy, false))
+	{
+		++Engagement->ChargedFired;
+	}
+}
+
+void UCombatTelemetrySubsystem::HandleChargedShotEnded(const AChargedShotProjectile& Projectile, AActor* const HitActor,
+	const bool bDamaged)
+{
+	const AStartechEnemyShip* const Enemy = Cast<AStartechEnemyShip>(Projectile.GetLaunch().Shooter.Get());
+	if (Projectile.GetWorld() != GetWorld() || !Enemy || !bDamaged || !HitActor || HitActor != GetPlayer())
+	{
+		return;
+	}
+	// The damage itself was already counted as an enemy hit (HandleDamage); this splits it out.
+	if (FCombatEngagement* const Engagement = FindEngagement(*Enemy, true))
+	{
+		++Engagement->ChargedHit;
+		Engagement->ChargedDamage += Projectile.GetLaunch().Damage;
+	}
+}
+
 void UCombatTelemetrySubsystem::HandleDamage(const UHealthComponent& Health, const float ShieldDamage, const float HullDamage,
 	AActor* const Instigator, const bool bShieldDrain, const bool bFatal)
 {
@@ -348,6 +385,7 @@ void UCombatTelemetrySubsystem::Close(const int32 Index, const ECombatEngagement
 	Engagement.End = End;
 	// The shot that opened an engagement by hitting the player was fired before it existed.
 	Engagement.EnemyShots = FMath::Max(Engagement.EnemyShots, Engagement.EnemyHits);
+	Engagement.ChargedFired = FMath::Max(Engagement.ChargedFired, Engagement.ChargedHit);
 	Engagement.EndTime = End == ECombatEngagementEnd::Disengaged ? Engagement.LastActivityTime : Now();
 
 	UE_LOG(LogStartechCombatLog, Log, TEXT("[CombatLog] %s tier %d %s: on target %.2f s, total %.2f s, shots hit %d of %d (blocked %d%s, missed %d), rounds %d (%.1f cr), taken %.0f+%.0f, enemy hits %d of %d, gained %.1f"),
@@ -376,7 +414,8 @@ void UCombatTelemetrySubsystem::WriteCsv(const FCombatEngagement& Engagement)
 	if (bFirst)
 	{
 		Line += TEXT("Start,Enemy,Tier,End,Ammo,LasersLevel,TimeOnTarget,TotalTime,ShotsFired,ShotsHit,ShotsBlocked,ShotsMissed,Rounds,RoundsByAmmo,AmmoCost,")
-			TEXT("ShieldTaken,HullTaken,HealthLostPct,EnemyShots,EnemyHits,Credits,LootValue,LootAmmoRounds,NetProfit,PlayerDied\n");
+			TEXT("ShieldTaken,HullTaken,HealthLostPct,EnemyShots,EnemyHits,Credits,LootValue,LootAmmoRounds,NetProfit,PlayerDied,")
+			TEXT("ChargedFired,ChargedHit,ChargedDamage\n");
 	}
 
 	FString ByAmmo;
@@ -385,7 +424,7 @@ void UCombatTelemetrySubsystem::WriteCsv(const FCombatEngagement& Engagement)
 		ByAmmo += FString::Printf(TEXT("%s%s:%d"), ByAmmo.IsEmpty() ? TEXT("") : TEXT(";"), *Use.AmmoName, Use.Rounds);
 	}
 	const float Taken = Engagement.ShieldTaken + Engagement.HullTaken;
-	Line += FString::Printf(TEXT("%.2f,%s,%d,%s,%s,%d,%.2f,%.2f,%d,%d,%d,%d,%d,%s,%.2f,%.1f,%.1f,%.1f,%d,%d,%d,%.1f,%d,%.1f,%d\n"),
+	Line += FString::Printf(TEXT("%.2f,%s,%d,%s,%s,%d,%.2f,%.2f,%d,%d,%d,%d,%d,%s,%.2f,%.1f,%.1f,%.1f,%d,%d,%d,%.1f,%d,%.1f,%d,%d,%d,%.1f\n"),
 		Engagement.StartTime, *Engagement.EnemyType, Engagement.Tier, CombatTelemetry::EndName(Engagement.End),
 		*Engagement.GetMainAmmo(), Engagement.LasersLevel, Engagement.TimeOnTarget, Engagement.EndTime - Engagement.StartTime,
 		Engagement.ShotsFired, Engagement.ShotsHit, Engagement.ShotsBlocked, Engagement.ShotsMissed, Engagement.GetRounds(),
@@ -393,10 +432,19 @@ void UCombatTelemetrySubsystem::WriteCsv(const FCombatEngagement& Engagement)
 		Engagement.ShieldTaken, Engagement.HullTaken,
 		Engagement.PlayerMaxHealth > 0.f ? 100.f * Taken / Engagement.PlayerMaxHealth : 0.f,
 		Engagement.EnemyShots, Engagement.EnemyHits, Engagement.Credits, Engagement.LootValue, Engagement.LootAmmoRounds,
-		Engagement.GetNetProfit(), Engagement.End == ECombatEngagementEnd::PlayerDied ? 1 : 0);
+		Engagement.GetNetProfit(), Engagement.End == ECombatEngagementEnd::PlayerDied ? 1 : 0,
+		Engagement.ChargedFired, Engagement.ChargedHit, Engagement.ChargedDamage);
 
 	FFileHelper::SaveStringToFile(Line, *CsvPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
 		&IFileManager::Get(), FILEWRITE_Append);
+}
+
+void UCombatTelemetrySubsystem::ResetSession()
+{
+	Open.Reset();
+	Finished.Reset();
+	EnemyShotsByType.Reset();
+	SessionStart = Now();
 }
 
 TArray<FString> UCombatTelemetrySubsystem::BuildReport() const
@@ -414,6 +462,9 @@ TArray<FString> UCombatTelemetrySubsystem::BuildReport() const
 		int32 ShotsHit = 0;
 		int32 EnemyShots = 0;
 		int32 EnemyHits = 0;
+		int32 ChargedFired = 0;
+		int32 ChargedHit = 0;
+		double ChargedDamage = 0.0;
 		double Taken = 0.0;
 		double LostShare = 0.0;
 		double Gained = 0.0;
@@ -438,6 +489,9 @@ TArray<FString> UCombatTelemetrySubsystem::BuildReport() const
 		Group->ShotsHit += Each.ShotsHit;
 		Group->EnemyShots += Each.EnemyShots;
 		Group->EnemyHits += Each.EnemyHits;
+		Group->ChargedFired += Each.ChargedFired;
+		Group->ChargedHit += Each.ChargedHit;
+		Group->ChargedDamage += Each.ChargedDamage;
 		Group->Gained += Each.LootValue;
 		Group->AmmoCost += Each.GetAmmoCost();
 		Group->CombatSeconds += Each.EndTime - Each.StartTime;
@@ -457,7 +511,7 @@ TArray<FString> UCombatTelemetrySubsystem::BuildReport() const
 	TArray<FString> Lines;
 	Lines.Add(FString::Printf(TEXT("Session %.1f min, %d engagement(s), CSV %s"), SessionMinutes, Finished.Num(),
 		CsvPath.IsEmpty() ? TEXT("(none yet)") : *CsvPath));
-	Lines.Add(TEXT("Tier Enemy    Eng Kills Died  TTK on/total    Hit%   Taken/kill  Lost/kill  Profit/kill  cr/min fight  EnemyShots/Hits"));
+	Lines.Add(TEXT("Tier Enemy    Eng Kills Died  TTK on/total    Hit%   Taken/kill  Lost/kill  Profit/kill  cr/min fight  EnemyShots/Hits  Uptime  Charged hit/fired (dmg)"));
 	double TotalGained = 0.0;
 	double TotalCost = 0.0;
 	for (const FGroup& G : Groups)
@@ -465,11 +519,21 @@ TArray<FString> UCombatTelemetrySubsystem::BuildReport() const
 		const double Kills = FMath::Max(G.Kills, 1);
 		TotalGained += G.Gained;
 		TotalCost += G.AmmoCost;
-		Lines.Add(FString::Printf(TEXT("%-4d %-9s %3d %5d %4d  %5.2f/%6.2f s  %5.1f%%  %9.1f  %8.1f%%  %11.1f  %12.1f  %d/%d"),
+		// Fire uptime: the enemy's laser shots against the most its two mounts could fire over the engagements.
+		const UCombatBalance* const Balance = UCombatBalance::Get();
+		const FEnemyBalance* const Stats = Balance ? Balance->Enemies.FindByPredicate([&G](const FEnemyBalance& Each)
+		{
+			return Each.EnemyTag.GetTagName() == FName(*(TEXT("Enemy.") + G.Type));
+		}) : nullptr;
+		const float FireRate = Stats && Stats->LaserWeapon ? Stats->LaserWeapon->FireRate : 0.f;
+		const double MaxShots = G.CombatSeconds * FireRate * 2.0;
+		const FString Uptime = MaxShots > 0.0 ? FString::Printf(TEXT("%5.0f%%"), 100.0 * G.EnemyShots / MaxShots) : FString(TEXT("    -"));
+		Lines.Add(FString::Printf(TEXT("%-4d %-9s %3d %5d %4d  %5.2f/%6.2f s  %5.1f%%  %9.1f  %8.1f%%  %11.1f  %12.1f  %d/%d  %s  %s"),
 			G.Tier, *G.Type, G.Engagements, G.Kills, G.PlayerDeaths, G.OnTarget / Kills, G.Total / Kills,
 			G.ShotsFired > 0 ? 100.0 * G.ShotsHit / G.ShotsFired : 0.0, G.Taken / Kills, 100.0 * G.LostShare / Kills,
 			(G.Gained - G.AmmoCost) / Kills, G.CombatSeconds > 0.0 ? 60.0 * (G.Gained - G.AmmoCost) / G.CombatSeconds : 0.0,
-			G.EnemyShots, G.EnemyHits));
+			G.EnemyShots, G.EnemyHits, *Uptime,
+			G.ChargedFired > 0 ? *FString::Printf(TEXT("%d/%d (%.0f)"), G.ChargedHit, G.ChargedFired, G.ChargedDamage) : TEXT("-")));
 	}
 	Lines.Add(FString::Printf(TEXT("Total gained %.0f cr, ammo %.0f cr, net %.0f cr: %.1f cr/min over the session."),
 		TotalGained, TotalCost, TotalGained - TotalCost, (TotalGained - TotalCost) / SessionMinutes));

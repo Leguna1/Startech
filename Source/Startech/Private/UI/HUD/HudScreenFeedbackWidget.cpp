@@ -1,12 +1,15 @@
 #include "UI/HUD/HudScreenFeedbackWidget.h"
 
 #include "Camera/PlayerCameraManager.h"
+#include "Combat/ChargedShotSubsystem.h"
+#include "Combat/EnemyChargeComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Gates/WarpTransitionComponent.h"
 #include "HealthComponent.h"
 #include "HomeRespawnSubsystem.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "StartechShipPawn.h"
+#include "TargetingComponent.h"
 #include "UI/HUD/HudDraw.h"
 #include "UI/HUD/StartechHudStyle.h"
 
@@ -38,6 +41,16 @@ namespace ScreenFeedback
 	// A refusal not being retried (not from a gate) stays up this long.
 	constexpr float WarpRefusalHoldSeconds = 2.f;
 	constexpr float MessageHeightFraction = 0.32f;
+
+	// Charged-shot warning brackets: arm length, thickness, and padding around the ship's projected bounds.
+	constexpr float ChargeBracketArm = 14.f;
+	constexpr float ChargeBracketThickness = 3.f;
+	constexpr float ChargeBracketPadding = 6.f;
+
+	// The charged-shot edge pulses between these intensities.
+	constexpr float ChargeEdgeMin = 0.35f;
+	constexpr float ChargeEdgeMax = 1.f;
+
 }
 
 void UHudScreenFeedbackWidget::NativeDestruct()
@@ -57,6 +70,7 @@ void UHudScreenFeedbackWidget::HandleStyleChanged()
 	ShieldEdge = MakeEdgeInstance();
 	HullEdge = MakeEdgeInstance();
 	BoundsEdge = MakeEdgeInstance();
+	ChargeEdge = MakeEdgeInstance();
 
 	ShieldBrush = FSlateBrush();
 	HullBrush = FSlateBrush();
@@ -64,6 +78,8 @@ void UHudScreenFeedbackWidget::HandleStyleChanged()
 	ShieldBrush.SetResourceObject(ShieldEdge);
 	HullBrush.SetResourceObject(HullEdge);
 	BoundsBrush.SetResourceObject(BoundsEdge);
+	ChargeBrush = FSlateBrush();
+	ChargeBrush.SetResourceObject(ChargeEdge);
 }
 
 void UHudScreenFeedbackWidget::HandlePawnChanged(APawn* const OldPawn, APawn* const NewPawn)
@@ -305,6 +321,92 @@ void UHudScreenFeedbackWidget::HandleCameraModeChanged(const bool bInFirstPerson
 	bFirstPerson = bInFirstPerson;
 }
 
+void UHudScreenFeedbackWidget::DrawChargeWarnings(FSlateWindowElementList& Out, const int32 Layer,
+	const FGeometry& Geometry) const
+{
+	const UChargedShotSubsystem* const Shots = UChargedShotSubsystem::Get(this);
+	const AStartechShipPawn* const Ship = BoundShip.Get();
+	if (!Shots || !Ship)
+	{
+		return;
+	}
+
+	const UStartechHudStyle& HudStyle = GetHudStyle();
+	const UTargetingComponent* const Targeting = Ship->GetTargeting();
+	const AActor* const TargetActor = Targeting ? Targeting->GetCurrentTargetActor() : nullptr;
+
+	float EdgePulse = -1.f;
+	FVector2f EdgeDirection = FVector2f::ZeroVector;
+	for (const UEnemyChargeComponent* const Charge : Shots->GetActiveCharges())
+	{
+		const AActor* const Enemy = Charge->GetOwner();
+		if (!Enemy || Charge->GetTarget() != Ship)
+		{
+			continue;
+		}
+
+		const float Pulse = Charge->GetPulse();
+		FVector2f Min;
+		FVector2f Max;
+		const bool bOnScreen = GetActorFrame(*Enemy, Geometry, Min, Max);
+		if (bOnScreen)
+		{
+			// The current target too: padded, so it sits outside the reticle's own (also pulsing) brackets.
+			const FVector2f Pad(ScreenFeedback::ChargeBracketPadding * (Enemy == TargetActor ? 2.f : 1.f));
+			FHudDraw::CornerBrackets(Out, Layer, Geometry, Min - Pad, Max + Pad, ScreenFeedback::ChargeBracketArm,
+				FHudDraw::WithOpacity(HudStyle.DangerColor, FMath::Lerp(0.65f, 1.f, Pulse)),
+				ScreenFeedback::ChargeBracketThickness);
+		}
+		else if (Pulse > EdgePulse)
+		{
+			EdgePulse = Pulse;
+			EdgeDirection = GetHitDirection(Enemy->GetActorLocation());
+		}
+	}
+
+	if (EdgePulse >= 0.f)
+	{
+		DrawEdge(Out, Layer, Geometry, ChargeEdge, ChargeBrush, HudStyle.DangerColor,
+			FMath::Lerp(ScreenFeedback::ChargeEdgeMin, ScreenFeedback::ChargeEdgeMax, EdgePulse), EdgeDirection);
+	}
+}
+
+bool UHudScreenFeedbackWidget::GetActorFrame(const AActor& Actor, const FGeometry& Geometry, FVector2f& OutMin,
+	FVector2f& OutMax) const
+{
+	const APlayerController* const PC = GetOwningPlayer();
+	if (!PC)
+	{
+		return false;
+	}
+
+	const FVector2f WidgetSize(Geometry.GetLocalSize());
+	FVector2f Centre;
+	if (!FHudDraw::ProjectToWidget(*this, *PC, Geometry, Actor.GetActorLocation(), Centre)
+		|| !FHudDraw::IsInside(Centre, WidgetSize))
+	{
+		return false;
+	}
+
+	FVector Origin;
+	FVector Extent;
+	Actor.GetActorBounds(true, Origin, Extent);
+	OutMin = Centre;
+	OutMax = Centre;
+	for (int32 Corner = 0; Corner < 8; ++Corner)
+	{
+		const FVector Offset((Corner & 1) ? Extent.X : -Extent.X, (Corner & 2) ? Extent.Y : -Extent.Y,
+			(Corner & 4) ? Extent.Z : -Extent.Z);
+		FVector2f Point;
+		if (FHudDraw::ProjectToWidget(*this, *PC, Geometry, Origin + Offset, Point))
+		{
+			OutMin = FVector2f::Min(OutMin, Point);
+			OutMax = FVector2f::Max(OutMax, Point);
+		}
+	}
+	return true;
+}
+
 FVector2f UHudScreenFeedbackWidget::GetHitDirection(const FVector& SourceLocation) const
 {
 	const AActor* const Ship = BoundShip.Get();
@@ -412,6 +514,11 @@ int32 UHudScreenFeedbackWidget::NativePaint(const FPaintArgs& Args, const FGeome
 	const UWorld* const World = GetWorld();
 	const UHomeRespawnSubsystem* const Respawn = World ? World->GetSubsystem<UHomeRespawnSubsystem>() : nullptr;
 	const bool bRespawning = Respawn && Respawn->IsRespawning();
+
+	if (!bRespawning)
+	{
+		DrawChargeWarnings(OutDrawElements, EdgeLayer, AllottedGeometry);
+	}
 
 	// Cockpit glass: a thin cut-corner frame inset from the edges.
 	if (bFirstPerson && !bRespawning)
