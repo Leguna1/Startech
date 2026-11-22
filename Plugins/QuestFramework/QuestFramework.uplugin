@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Quest Framework",
+	"Description": "Data-driven quests with tagged objectives, prerequisites, time limits, category limits, turn-in and generated bounties. Game-agnostic: the game reports tagged events and supplies inventory, rewards and the turn-in rule through a small bridge.",
+	"Category": "Gameplay",
+	"CreatedBy": "Abdul",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "QuestFramework",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

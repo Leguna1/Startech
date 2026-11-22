@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Save Framework",
+	"Description": "Slot-based saving for any project. Systems register as save participants and write their own versioned records; the framework handles slots, debounced async saves, backups and late loading. Game-agnostic.",
+	"Category": "Gameplay",
+	"CreatedBy": "Abdul",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "SaveFramework",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

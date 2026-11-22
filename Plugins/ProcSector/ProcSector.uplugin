@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "ProcSector",
+	"Description": "Regenerates one persistent space level into different seeded sectors behind a jump-gate warp. Includes pooling and distance-based relevance.",
+	"Category": "Gameplay",
+	"CreatedBy": "Abdul",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "ProcSector",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
