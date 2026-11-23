@@ -1,5 +1,6 @@
 #include "Flow/StartechMenuGameMode.h"
 
+#include "Audio/StartechMusicSubsystem.h"
 #include "Blueprint/UserWidget.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -15,6 +16,12 @@ AStartechMenuGameMode::AStartechMenuGameMode()
 void AStartechMenuGameMode::StartPlay()
 {
 	Super::StartPlay();
+
+	// After any game music fades out (quitting to the menu), the menu's playlist fades in.
+	if (UStartechMusicSubsystem* const Music = UStartechMusicSubsystem::Get(this))
+	{
+		Music->PlayMenuMusic();
+	}
 
 	APlayerController* const PC = UGameplayStatics::GetPlayerController(this, 0);
 	const TSubclassOf<UMainMenuWidget> MenuClass = UStartechSettings::Get().MainMenuWidgetClass.LoadSynchronous();

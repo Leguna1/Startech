@@ -1,5 +1,6 @@
 #include "Flow/StartechGameFlowSubsystem.h"
 
+#include "Audio/StartechMusicSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Flow/CallsignRules.h"
@@ -139,6 +140,11 @@ void UStartechGameFlowSubsystem::QuitToMainMenu()
 	{
 		UGameplayStatics::SetGamePaused(World, false);
 	}
+	// The music outlives the map: it fades out across the load, and the menu's playlist follows.
+	if (UStartechMusicSubsystem* const Music = GetGameInstance()->GetSubsystem<UStartechMusicSubsystem>())
+	{
+		Music->FadeOut();
+	}
 	const TSoftObjectPtr<UWorld>& MainMenuMap = UStartechSettings::Get().MainMenuMap;
 	if (MainMenuMap.IsNull())
 	{
@@ -182,6 +188,12 @@ void UStartechGameFlowSubsystem::OpenGameMap()
 	{
 		UE_LOG(LogStartechSave, Error, TEXT("UStartechSettings::GameMap is not set; the game can't start."));
 		return;
+	}
+
+	// The menu music fades out across the load; the home sector's playlist follows when it is ready.
+	if (UStartechMusicSubsystem* const Music = GetGameInstance()->GetSubsystem<UStartechMusicSubsystem>())
+	{
+		Music->FadeOut();
 	}
 
 	// The menu's UI-only input mode makes the game viewport ignore input, and the viewport outlives the travel:

@@ -36,6 +36,8 @@ void UMainMenuHomePanel::BuildContent()
 
 	NewGameButton = AddButton(*Column, LOCTEXT("NewGame", "New game"));
 	LoadButton = AddButton(*Column, LOCTEXT("Load", "Load"));
+	SettingsButton = AddButton(*Column, LOCTEXT("Settings", "Settings"));
+	ControlsButton = AddButton(*Column, LOCTEXT("Controls", "Controls"));
 	QuitButton = AddButton(*Column, LOCTEXT("Quit", "Quit"));
 }
 
@@ -55,6 +57,8 @@ void UMainMenuHomePanel::NativeConstruct()
 	ContinueButton->OnClicked.AddLambda([this]() { OnContinue.Broadcast(); });
 	NewGameButton->OnClicked.AddLambda([this]() { OnNewGame.Broadcast(); });
 	LoadButton->OnClicked.AddLambda([this]() { OnLoad.Broadcast(); });
+	SettingsButton->OnClicked.AddLambda([this]() { OnSettings.Broadcast(); });
+	ControlsButton->OnClicked.AddLambda([this]() { OnControls.Broadcast(); });
 	QuitButton->OnClicked.AddLambda([this]() { OnQuit.Broadcast(); });
 }
 
@@ -63,6 +67,8 @@ void UMainMenuHomePanel::NativeDestruct()
 	ContinueButton->OnClicked.Clear();
 	NewGameButton->OnClicked.Clear();
 	LoadButton->OnClicked.Clear();
+	SettingsButton->OnClicked.Clear();
+	ControlsButton->OnClicked.Clear();
 	QuitButton->OnClicked.Clear();
 	Super::NativeDestruct();
 }

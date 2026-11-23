@@ -40,9 +40,6 @@ namespace StartFlow
 
 	/** Seconds the screen takes to fade in once the player is docked. */
 	constexpr float FadeInSeconds = 1.f;
-
-	/** Seconds between the test aid's start commands. */
-	constexpr float StartCommandSpacingSeconds = 0.25f;
 }
 
 bool UStartechStartFlowSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -110,8 +107,8 @@ void UStartechStartFlowSubsystem::Deinitialize()
 	if (const UWorld* const World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(RetryTimer);
-		FTSTicker::GetCoreTicker().RemoveTicker(StartCommandTicker);
 	}
+	StartCommands.Stop();
 	Super::Deinitialize();
 }
 
@@ -193,8 +190,10 @@ void UStartechStartFlowSubsystem::HandleSectorReady(const FName SectorId)
 	OnGameStarted.Broadcast();
 
 #if !UE_BUILD_SHIPPING
-	StartFlow::CVarOnStartCommands.GetValueOnGameThread().ParseIntoArray(PendingStartCommands, TEXT(";"));
-	RunNextStartCommand();
+	StartCommands.Start(StartFlow::CVarOnStartCommands.GetValueOnGameThread(), [WeakThis = TWeakObjectPtr<UStartechStartFlowSubsystem>(this)]()
+	{
+		return WeakThis.IsValid() ? WeakThis->GetWorld() : nullptr;
+	});
 #endif
 }
 
@@ -209,46 +208,6 @@ void UStartechStartFlowSubsystem::PlaceShipAtStation(AStartechShipPawn& Ship) co
 
 	// The bounty refresh on docking is suppressed for the whole start (HandleAllParticipantsLoaded).
 	Ship.PlaceAt(Station->GetRespawnTransform());
-}
-
-void UStartechStartFlowSubsystem::RunNextStartCommand()
-{
-#if !UE_BUILD_SHIPPING
-	if (PendingStartCommands.IsEmpty() || !GEngine)
-	{
-		return;
-	}
-	const FString Command = PendingStartCommands[0].TrimStartAndEnd();
-	PendingStartCommands.RemoveAt(0);
-
-	// "wait <seconds>" only delays the next command.
-	float Delay = StartFlow::StartCommandSpacingSeconds;
-	if (Command.StartsWith(TEXT("wait "), ESearchCase::IgnoreCase))
-	{
-		Delay = FMath::Max(FCString::Atof(*Command.Mid(5)), StartFlow::StartCommandSpacingSeconds);
-	}
-	else if (!Command.IsEmpty())
-	{
-		// Through the player's console when there is one, as if typed, so viewport commands (HighResShot) work too.
-		if (APlayerController* const PC = UGameplayStatics::GetPlayerController(this, 0))
-		{
-			PC->ConsoleCommand(Command);
-		}
-		else
-		{
-			GEngine->Exec(GetWorld(), *Command);
-		}
-	}
-	// Spaced out, so each command sees what the previous one caused (Slate applies focus changes a frame later).
-	// Real time, so it also advances while the game is paused.
-	FTSTicker::GetCoreTicker().RemoveTicker(StartCommandTicker);
-	StartCommandTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
-	{
-		StartCommandTicker.Reset();
-		RunNextStartCommand();
-		return false;
-	}), Delay);
-#endif
 }
 
 void UStartechStartFlowSubsystem::ReleasePlayer() const

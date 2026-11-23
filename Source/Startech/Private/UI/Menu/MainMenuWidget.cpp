@@ -2,6 +2,8 @@
 
 #include "Components/WidgetSwitcher.h"
 #include "Flow/StartechGameFlowSubsystem.h"
+#include "UI/Controls/ControlsScreenWidget.h"
+#include "UI/Settings/SettingsScreenWidget.h"
 #include "UI/Menu/MainMenuCallsignPanel.h"
 #include "UI/Menu/MainMenuDialog.h"
 #include "UI/Menu/MainMenuHomePanel.h"
@@ -17,6 +19,23 @@ UMainMenuWidget::UMainMenuWidget(const FObjectInitializer& ObjectInitializer)
 	SetIsFocusable(true);
 }
 
+void UMainMenuWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	if (!ControlsScreen)
+	{
+		ControlsScreen = UMenuPageWidget::AddToMenu<UControlsScreenWidget>(*this, TEXT("ControlsScreen"));
+	}
+	if (!SettingsScreen)
+	{
+		SettingsScreen = UMenuPageWidget::AddToMenu<USettingsScreenWidget>(*this, TEXT("SettingsScreen"));
+		if (SettingsScreen)
+		{
+			SettingsScreen->SetShowMenuMusic(true);
+		}
+	}
+}
+
 void UMainMenuWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -24,6 +43,8 @@ void UMainMenuWidget::NativeConstruct()
 	HomePanel->OnContinue.AddUObject(this, &UMainMenuWidget::HandleContinue);
 	HomePanel->OnNewGame.AddUObject(this, &UMainMenuWidget::ShowSlots, false);
 	HomePanel->OnLoad.AddUObject(this, &UMainMenuWidget::ShowSlots, true);
+	HomePanel->OnControls.AddUObject(this, &UMainMenuWidget::OpenControls);
+	HomePanel->OnSettings.AddUObject(this, &UMainMenuWidget::OpenSettings);
 	HomePanel->OnQuit.AddLambda([this]()
 	{
 		if (UStartechGameFlowSubsystem* const Flow = GetFlow())
@@ -39,6 +60,15 @@ void UMainMenuWidget::NativeConstruct()
 	CallsignPanel->OnStart.AddUObject(this, &UMainMenuWidget::HandleStart);
 	CallsignPanel->OnBack.AddUObject(this, &UMainMenuWidget::ShowSlots, false);
 
+	if (ControlsScreen)
+	{
+		ControlsScreen->OnClosed.AddUObject(this, &UMainMenuWidget::HandlePageClosed);
+	}
+	if (SettingsScreen)
+	{
+		SettingsScreen->OnClosed.AddUObject(this, &UMainMenuWidget::HandlePageClosed);
+	}
+
 	ShowHome();
 }
 
@@ -47,12 +77,22 @@ void UMainMenuWidget::NativeDestruct()
 	HomePanel->OnContinue.RemoveAll(this);
 	HomePanel->OnNewGame.RemoveAll(this);
 	HomePanel->OnLoad.RemoveAll(this);
+	HomePanel->OnControls.RemoveAll(this);
+	HomePanel->OnSettings.RemoveAll(this);
 	HomePanel->OnQuit.Clear();
 	SlotsPanel->OnSlotPicked.RemoveAll(this);
 	SlotsPanel->OnDeleteRequested.RemoveAll(this);
 	SlotsPanel->OnBack.RemoveAll(this);
 	CallsignPanel->OnStart.RemoveAll(this);
 	CallsignPanel->OnBack.RemoveAll(this);
+	if (ControlsScreen)
+	{
+		ControlsScreen->OnClosed.RemoveAll(this);
+	}
+	if (SettingsScreen)
+	{
+		SettingsScreen->OnClosed.RemoveAll(this);
+	}
 	Super::NativeDestruct();
 }
 
@@ -63,7 +103,11 @@ FReply UMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyE
 		return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 	}
 
-	if (Dialog->IsOpen())
+	if (UMenuPageWidget* const Page = GetOpenPage())
+	{
+		Page->Close();
+	}
+	else if (Dialog->IsOpen())
 	{
 		Dialog->Cancel();
 	}
@@ -76,6 +120,53 @@ FReply UMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyE
 		ShowHome();
 	}
 	return FReply::Handled();
+}
+
+void UMainMenuWidget::OpenControls()
+{
+	OpenPage(ControlsScreen);
+}
+
+void UMainMenuWidget::OpenSettings()
+{
+	OpenPage(SettingsScreen);
+}
+
+void UMainMenuWidget::OpenPage(UMenuPageWidget* const Page)
+{
+	if (!Page || GetOpenPage())
+	{
+		return;
+	}
+	VisibilityBeforePage = PageSwitcher->GetVisibility();
+	PageSwitcher->SetVisibility(ESlateVisibility::Collapsed);
+	Page->Open();
+	SetKeyboardFocus();
+}
+
+void UMainMenuWidget::HandlePageClosed()
+{
+	PageSwitcher->SetVisibility(VisibilityBeforePage);
+	ShowHome();
+}
+
+UMenuPageWidget* UMainMenuWidget::GetOpenPage() const
+{
+	if (ControlsScreen && ControlsScreen->IsOpen())
+	{
+		return ControlsScreen;
+	}
+	return SettingsScreen && SettingsScreen->IsOpen() ? SettingsScreen.Get() : nullptr;
+}
+
+UHubButtonWidget* UMainMenuWidget::GetSettingsButton() const
+{
+	return HomePanel ? HomePanel->GetSettingsButton() : nullptr;
+}
+
+UHubButtonWidget* UMainMenuWidget::GetControlsButton() const
+{
+	return HomePanel ? HomePanel->GetControlsButton() : nullptr;
 }
 
 void UMainMenuWidget::ShowHome()

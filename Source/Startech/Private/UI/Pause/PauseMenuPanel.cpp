@@ -56,6 +56,8 @@ void UPauseMenuPanel::BuildContent()
 		return Button;
 	};
 	ResumeButton = AddButton(LOCTEXT("Resume", "Resume"));
+	SettingsButton = AddButton(LOCTEXT("Settings", "Settings"));
+	ControlsButton = AddButton(LOCTEXT("Controls", "Controls"));
 	MainMenuButton = AddButton(LOCTEXT("MainMenu", "Quit to main menu"));
 	QuitButton = AddButton(LOCTEXT("Quit", "Quit game"));
 }
@@ -64,6 +66,8 @@ void UPauseMenuPanel::NativeConstruct()
 {
 	Super::NativeConstruct();
 	ResumeButton->OnClicked.AddLambda([this]() { OnResume.Broadcast(); });
+	SettingsButton->OnClicked.AddLambda([this]() { OnSettings.Broadcast(); });
+	ControlsButton->OnClicked.AddLambda([this]() { OnControls.Broadcast(); });
 	MainMenuButton->OnClicked.AddLambda([this]() { OnQuitToMainMenu.Broadcast(); });
 	QuitButton->OnClicked.AddLambda([this]() { OnQuitGame.Broadcast(); });
 }
@@ -71,6 +75,8 @@ void UPauseMenuPanel::NativeConstruct()
 void UPauseMenuPanel::NativeDestruct()
 {
 	ResumeButton->OnClicked.Clear();
+	SettingsButton->OnClicked.Clear();
+	ControlsButton->OnClicked.Clear();
 	MainMenuButton->OnClicked.Clear();
 	QuitButton->OnClicked.Clear();
 	Super::NativeDestruct();

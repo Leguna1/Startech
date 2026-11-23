@@ -9,6 +9,7 @@ class UAudioComponent;
 class ULaserMountComponent;
 class UNiagaraComponent;
 class UShieldDrainMountComponent;
+class USoundBase;
 
 // The effect and sound of one laser bolt in flight.
 USTRUCT()
@@ -68,6 +69,9 @@ class STARTECH_API UWeaponEffectsComponent : public UActorComponent
 public:
 	UWeaponEffectsComponent();
 
+	/** Laser start sounds played so far (one per volley), for tests and the audio debug command. */
+	int32 GetStartSoundsPlayed() const { return StartSoundsPlayed; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(EEndPlayReason::Type EndPlayReason) override;
@@ -98,6 +102,10 @@ private:
 	// Stops the bolt's sound and deactivates its effect, which returns to the pool once it reports finished.
 	void EndBolt(const FLaserBoltEffect& Effect);
 
+	// Plays a laser's start sound once per volley: the owner's mounts firing the same sound within
+	// UStartechSettings::Audio.VolleyWindowSeconds make one sound. The local player's is non-spatial.
+	void PlayStartSound(USoundBase* Sound, const FVector& Location);
+
 	// Index into Bolts, or INDEX_NONE.
 	int32 FindBolt(int32 ShotId) const;
 
@@ -114,4 +122,12 @@ private:
 	// One entry per shield-drain mount that has fired.
 	UPROPERTY(Transient)
 	TArray<FDrainBeamEffect> Beams;
+
+	// The last start sound played, and when (world time), for the volley rule.
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> LastStartSound;
+
+	double LastStartSoundTime = -1.0;
+
+	int32 StartSoundsPlayed = 0;
 };

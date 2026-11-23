@@ -4,6 +4,10 @@
 #include "UI/Hub/HubWidgetBase.h"
 #include "MainMenuWidget.generated.h"
 
+class UControlsScreenWidget;
+class UMenuPageWidget;
+class USettingsScreenWidget;
+class UHubButtonWidget;
 class UMainMenuCallsignPanel;
 class UMainMenuDialog;
 class UMainMenuHomePanel;
@@ -19,8 +23,10 @@ class UWidgetSwitcher;
  * - New game: the slot page; an occupied slot asks "Overwrite <name>? This can't be undone." first; then the
  *   callsign page, whose Start creates the game.
  * - Load: the slot page with occupied slots only, each with Load and a quiet Delete (confirmed).
+ * - Controls: the Controls screen (UControlsScreenWidget, made in C++ over the pages); Back returns home.
+ * - Settings: the Settings page (USettingsScreenWidget: volumes, with the Menu music slider); Back returns home.
  * - Quit: closes the game.
- * Escape closes the dialog or goes back one page. Every panel uses this widget's Style (DA_HudStyle).
+ * Escape closes an open page (Controls, Settings) or the dialog, or goes back one page. Every panel uses this widget's Style (DA_HudStyle).
  */
 UCLASS(Abstract)
 class STARTECH_API UMainMenuWidget : public UHubWidgetBase
@@ -31,14 +37,38 @@ public:
 	/** Takes the mouse and keyboard focus. */
 	UMainMenuWidget(const FObjectInitializer& ObjectInitializer);
 
+	/** Home: Controls. Hides the pages and opens the Controls screen. */
+	void OpenControls();
+
+	/** The Controls screen, or null if it couldn't be made. */
+	UControlsScreenWidget* GetControlsScreen() const { return ControlsScreen; }
+
+	/** Settings: hides the menu's own content and opens the Settings page. */
+	void OpenSettings();
+
+	/** The Settings page, or null if it couldn't be made. */
+	USettingsScreenWidget* GetSettingsScreen() const { return SettingsScreen; }
+
+	/** The Settings button, for tests. */
+	UHubButtonWidget* GetSettingsButton() const;
+
+	/** The open page (Controls or Settings), or null. */
+	UMenuPageWidget* GetOpenPage() const;
+
+	/** The home page's Controls button, for tests. */
+	UHubButtonWidget* GetControlsButton() const;
+
 protected:
+	/** Adds the Controls screen and the Settings page over the menu. */
+	virtual void NativeOnInitialized() override;
+
 	/** Binds the panels and shows the home page. */
 	virtual void NativeConstruct() override;
 
 	/** Unbinds the panels. */
 	virtual void NativeDestruct() override;
 
-	/** Escape: closes the dialog, or goes back one page. */
+	/** Escape: closes an open page or the dialog, or goes back one page. */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** Holds HomePanel, SlotsPanel and CallsignPanel; shows one. */
@@ -62,6 +92,12 @@ protected:
 	TObjectPtr<UMainMenuDialog> Dialog;
 
 private:
+	/** Hides the menu's own content and opens Page. */
+	void OpenPage(UMenuPageWidget* Page);
+
+	/** A page closed: shows the menu's own content again. */
+	void HandlePageClosed();
+
 	/** Shows the home page with Continue and Load set from the slots on disk. */
 	void ShowHome();
 
@@ -94,4 +130,15 @@ private:
 
 	/** The slot the callsign page creates the game in. */
 	int32 PendingNewGameSlot = INDEX_NONE;
+
+	/** Over the pages, collapsed until Controls is clicked. */
+	UPROPERTY(Transient)
+	TObjectPtr<UControlsScreenWidget> ControlsScreen;
+
+	/** Over the menu, collapsed until Settings is clicked. */
+	UPROPERTY(Transient)
+	TObjectPtr<USettingsScreenWidget> SettingsScreen;
+
+	/** PageSwitcher's visibility before a page hid it. */
+	ESlateVisibility VisibilityBeforePage = ESlateVisibility::Visible;
 };

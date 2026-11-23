@@ -1,5 +1,7 @@
 #include "StartechShipPawn.h"
 
+#include "Audio/StartechAudioSubsystem.h"
+#include "Audio/StartechMusicSubsystem.h"
 #include "Camera/CameraComponent.h"
 #include "Core/SectorDirectorSubsystem.h"
 #include "Death/ShipDeathComponent.h"
@@ -465,6 +467,16 @@ void AStartechShipPawn::HandleWarpStarted(const FName DestinationSectorId)
 {
 	bWarpProtected = true;
 	HealthComponent->SetInvulnerable(true);
+
+	// The music starts fading with the screen, a little before the director's sector change.
+	if (const UStartechAudioSubsystem* const Audio = UStartechAudioSubsystem::Get(this))
+	{
+		Audio->PlayWarpSound(this);
+	}
+	if (UStartechMusicSubsystem* const Music = UStartechMusicSubsystem::Get(this))
+	{
+		Music->PrepareSectorChange(DestinationSectorId);
+	}
 }
 
 void AStartechShipPawn::HandleWarpFinished(const FName SectorId)
@@ -511,6 +523,11 @@ void AStartechShipPawn::OpenHub()
 	PC->SetInputMode(InputMode);
 	PC->SetShowMouseCursor(true);
 
+	// Effects fade to silent while the hub is open; the music plays on.
+	if (UStartechAudioSubsystem* const Audio = UStartechAudioSubsystem::Get(this))
+	{
+		Audio->SetHubOpen(true);
+	}
 	OnHubOpenChanged.Broadcast(true);
 }
 
@@ -530,6 +547,10 @@ void AStartechShipPawn::CloseHub()
 		FStartechInputState::SetGameOnly(*PC);
 	}
 
+	if (UStartechAudioSubsystem* const Audio = UStartechAudioSubsystem::Get(this))
+	{
+		Audio->SetHubOpen(false);
+	}
 	OnHubOpenChanged.Broadcast(false);
 }
 

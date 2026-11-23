@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Containers/Ticker.h"
+#include "Flow/StartechCommandQueue.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "StartechStartFlowSubsystem.generated.h"
 
@@ -94,12 +94,6 @@ private:
 	/** Retries RequestSector while the director is busy. */
 	FTimerHandle RetryTimer;
 
-	/** Runs one test-aid command (Startech.Flow.OnStartCommands, non-shipping), then waits for the next. */
-	void RunNextStartCommand();
-
-	/** Test-aid commands still to run. */
-	TArray<FString> PendingStartCommands;
-
-	/** Spaces the test-aid commands out (real time, so it runs while paused). */
-	FTSTicker::FDelegateHandle StartCommandTicker;
+	/** Runs the test-aid commands (Startech.Flow.OnStartCommands, non-shipping) once the game has started. */
+	FStartechCommandQueue StartCommands;
 };

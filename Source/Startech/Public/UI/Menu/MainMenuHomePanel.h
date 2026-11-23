@@ -9,7 +9,7 @@ class UTextBlock;
 
 /**
  * The main menu's first page: the title "Startech" and the buttons Continue (with the pilot it continues, hidden when
- * no slot is occupied), New game, Load (disabled when no slot is occupied) and Quit, in a column.
+ * no slot is occupied), New game, Load (disabled when no slot is occupied), Settings, Controls and Quit, in a column.
  */
 UCLASS()
 class STARTECH_API UMainMenuHomePanel : public UHubWidgetBase
@@ -32,8 +32,20 @@ public:
 	/** Load was clicked. */
 	FSimpleMulticastDelegate OnLoad;
 
+	/** Settings was clicked. */
+	FSimpleMulticastDelegate OnSettings;
+
+	/** Controls was clicked. */
+	FSimpleMulticastDelegate OnControls;
+
 	/** Quit was clicked. */
 	FSimpleMulticastDelegate OnQuit;
+
+	/** The Controls button, for tests. */
+	UHubButtonWidget* GetControlsButton() const { return ControlsButton; }
+
+	/** The Settings button, for tests. */
+	UHubButtonWidget* GetSettingsButton() const { return SettingsButton; }
 
 protected:
 	/** The title and the button column, centred. */
@@ -64,6 +76,14 @@ private:
 	/** Load. */
 	UPROPERTY(Transient)
 	TObjectPtr<UHubButtonWidget> LoadButton;
+
+	/** Settings. */
+	UPROPERTY(Transient)
+	TObjectPtr<UHubButtonWidget> SettingsButton;
+
+	/** Controls. */
+	UPROPERTY(Transient)
+	TObjectPtr<UHubButtonWidget> ControlsButton;
 
 	/** Quit. */
 	UPROPERTY(Transient)

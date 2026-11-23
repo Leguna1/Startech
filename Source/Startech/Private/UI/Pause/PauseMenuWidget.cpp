@@ -4,6 +4,8 @@
 #include "Flow/StartechPauseMenuSubsystem.h"
 #include "HomeRespawnSubsystem.h"
 #include "StartechShipPawn.h"
+#include "UI/Controls/ControlsScreenWidget.h"
+#include "UI/Settings/SettingsScreenWidget.h"
 #include "UI/Menu/MainMenuDialog.h"
 #include "UI/Pause/PauseMenuPanel.h"
 
@@ -16,10 +18,37 @@ UPauseMenuWidget::UPauseMenuWidget(const FObjectInitializer& ObjectInitializer)
 	SetIsFocusable(true);
 }
 
+void UPauseMenuWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	if (!ControlsScreen)
+	{
+		ControlsScreen = UMenuPageWidget::AddToMenu<UControlsScreenWidget>(*this, TEXT("ControlsScreen"));
+	}
+	if (!SettingsScreen)
+	{
+		SettingsScreen = UMenuPageWidget::AddToMenu<USettingsScreenWidget>(*this, TEXT("SettingsScreen"));
+		if (SettingsScreen)
+		{
+			SettingsScreen->SetShowMenuMusic(false);
+		}
+	}
+}
+
 void UPauseMenuWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 	PausePanel->OnResume.AddUObject(this, &UPauseMenuWidget::HandleResume);
+	PausePanel->OnControls.AddUObject(this, &UPauseMenuWidget::OpenControls);
+	PausePanel->OnSettings.AddUObject(this, &UPauseMenuWidget::OpenSettings);
+	if (ControlsScreen)
+	{
+		ControlsScreen->OnClosed.AddUObject(this, &UPauseMenuWidget::HandlePageClosed);
+	}
+	if (SettingsScreen)
+	{
+		SettingsScreen->OnClosed.AddUObject(this, &UPauseMenuWidget::HandlePageClosed);
+	}
 	PausePanel->OnQuitToMainMenu.AddUObject(this, &UPauseMenuWidget::HandleQuitToMainMenu);
 	PausePanel->OnQuitGame.AddUObject(this, &UPauseMenuWidget::HandleQuitGame);
 }
@@ -27,6 +56,16 @@ void UPauseMenuWidget::NativeConstruct()
 void UPauseMenuWidget::NativeDestruct()
 {
 	PausePanel->OnResume.RemoveAll(this);
+	PausePanel->OnControls.RemoveAll(this);
+	PausePanel->OnSettings.RemoveAll(this);
+	if (ControlsScreen)
+	{
+		ControlsScreen->OnClosed.RemoveAll(this);
+	}
+	if (SettingsScreen)
+	{
+		SettingsScreen->OnClosed.RemoveAll(this);
+	}
 	PausePanel->OnQuitToMainMenu.RemoveAll(this);
 	PausePanel->OnQuitGame.RemoveAll(this);
 	Super::NativeDestruct();
@@ -38,7 +77,11 @@ FReply UPauseMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKey
 	{
 		return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 	}
-	if (Dialog->IsOpen())
+	if (UMenuPageWidget* const Page = GetOpenPage())
+	{
+		Page->Close();
+	}
+	else if (Dialog->IsOpen())
 	{
 		Dialog->Cancel();
 	}
@@ -55,6 +98,53 @@ void UPauseMenuWidget::HandleResume()
 	{
 		PauseMenus->Resume();
 	}
+}
+
+void UPauseMenuWidget::OpenControls()
+{
+	OpenPage(ControlsScreen);
+}
+
+void UPauseMenuWidget::OpenSettings()
+{
+	OpenPage(SettingsScreen);
+}
+
+void UPauseMenuWidget::OpenPage(UMenuPageWidget* const Page)
+{
+	if (!Page || GetOpenPage())
+	{
+		return;
+	}
+	VisibilityBeforePage = PausePanel->GetVisibility();
+	PausePanel->SetVisibility(ESlateVisibility::Collapsed);
+	Page->Open();
+	SetKeyboardFocus();
+}
+
+void UPauseMenuWidget::HandlePageClosed()
+{
+	PausePanel->SetVisibility(VisibilityBeforePage);
+	SetKeyboardFocus();
+}
+
+UMenuPageWidget* UPauseMenuWidget::GetOpenPage() const
+{
+	if (ControlsScreen && ControlsScreen->IsOpen())
+	{
+		return ControlsScreen;
+	}
+	return SettingsScreen && SettingsScreen->IsOpen() ? SettingsScreen.Get() : nullptr;
+}
+
+UHubButtonWidget* UPauseMenuWidget::GetSettingsButton() const
+{
+	return PausePanel ? PausePanel->GetSettingsButton() : nullptr;
+}
+
+UHubButtonWidget* UPauseMenuWidget::GetControlsButton() const
+{
+	return PausePanel ? PausePanel->GetControlsButton() : nullptr;
 }
 
 void UPauseMenuWidget::HandleQuitToMainMenu()

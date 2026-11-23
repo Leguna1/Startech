@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "Audio/StartechAudioTypes.h"
 #include "Boost/ShipBoostSettings.h"
 #include "Combat/ChargedShotTypes.h"
 #include "Death/ShipDeathTypes.h"
@@ -152,6 +153,14 @@ public:
 	/** The action bar's slots and their keys: DA_ActionBarLayout (UActionBarComponent). */
 	UPROPERTY(Config, EditAnywhere, Category = "HUD")
 	TSoftObjectPtr<class UActionBarLayout> ActionBarLayout;
+
+	/** Music playlists, sound groups, mixes, default volumes and a few effect sounds (UStartechMusicSubsystem, UStartechAudioSubsystem). */
+	UPROPERTY(Config, EditAnywhere, Category = "Audio")
+	FStartechAudioSettings Audio;
+
+	/** The Controls screen's groups, rows, key labels and tips: DA_ControlsHelp (UControlsScreenWidget). */
+	UPROPERTY(Config, EditAnywhere, Category = "Menus")
+	TSoftObjectPtr<class UControlsHelpData> ControlsHelp;
 
 	/**
 	 * Each sector's tier (Terra 1, Rust 2, Glacier 3, Jove 4). A sector missing here counts as tier 1. Read it only

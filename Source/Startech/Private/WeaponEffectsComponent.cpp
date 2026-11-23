@@ -9,6 +9,9 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "ShieldDrainMountComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/Pawn.h"
+#include "StartechSettings.h"
 
 namespace
 {
@@ -211,7 +214,7 @@ void UWeaponEffectsComponent::HandleShotFired(ULaserMountComponent* const Mount,
 	}
 
 	SpawnOneShotEffect(this, Ammo->StartEffect, Start, Rotation, Ammo->Color);
-	PlayOneShotSound(this, Ammo->StartSound, Start);
+	PlayStartSound(Ammo->StartSound, Start);
 
 	FLaserBoltEffect Effect;
 	Effect.ShotId = ShotId;
@@ -239,6 +242,36 @@ void UWeaponEffectsComponent::HandleShotFired(ULaserMountComponent* const Mount,
 	}
 
 	Bolts.Add(Effect);
+}
+
+void UWeaponEffectsComponent::PlayStartSound(USoundBase* const Sound, const FVector& Location)
+{
+	const UWorld* const World = GetWorld();
+	if (!Sound || !World)
+	{
+		return;
+	}
+
+	const FStartechAudioSettings& Settings = UStartechSettings::Get().Audio;
+	const double Now = World->GetTimeSeconds();
+	if (Sound == LastStartSound && LastStartSoundTime >= 0.0 && Now - LastStartSoundTime <= Settings.VolleyWindowSeconds)
+	{
+		return;
+	}
+	LastStartSound = Sound;
+	LastStartSoundTime = Now;
+	++StartSoundsPlayed;
+
+	// From a chase camera the player's own guns would sound distant if placed at the mounts.
+	const APawn* const Pawn = Cast<APawn>(GetOwner());
+	if (Pawn && Pawn->IsLocallyControlled() && Pawn->IsPlayerControlled())
+	{
+		UGameplayStatics::PlaySound2D(this, Sound, Settings.PlayerLaserStartVolume);
+	}
+	else
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, Sound, Location);
+	}
 }
 
 void UWeaponEffectsComponent::HandleShotMoved(ULaserMountComponent* const Mount, const int32 ShotId, const FVector Location, const FRotator Rotation)
